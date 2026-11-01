@@ -1,0 +1,14 @@
+<Window x:Class="FanController.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False"
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        Focusable="False" IsHitTestVisible="False">
+    <Border Background="#B0121216" CornerRadius="8" Padding="12,8" Margin="12">
+        <StackPanel>
+            <TextBlock x:Name="OvCpu" FontFamily="Consolas" FontSize="13" Foreground="#FFE8E8EC"/>
+            <TextBlock x:Name="OvGpu" FontFamily="Consolas" FontSize="13" Foreground="#FFE8E8EC" Margin="0,4,0,0"/>
+        </StackPanel>
+    </Border>
+</Window>

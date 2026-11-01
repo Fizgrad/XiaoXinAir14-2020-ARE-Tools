@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+publish_out/
+FanDiag/bin/
+FanDiag/obj/
+FanDiag/diag.txt
+FanDiag/bt.txt
+FanDiag/dsdt.aml
+*.user
+.vs/

@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish (win-x64, framework-dependent)
+        run: dotnet publish FanController.csproj -c Release -r win-x64 --self-contained false -o publish_out
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path publish_out\* -DestinationPath "FanController-${{ github.ref_name }}-win-x64.zip"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FanController-*.zip
+          generate_release_notes: true
