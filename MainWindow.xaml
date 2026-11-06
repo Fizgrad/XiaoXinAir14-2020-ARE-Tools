@@ -49,22 +49,44 @@
                 </ScrollViewer>
             </TabItem>
 
-            <!-- ============ 风扇控制 ============ -->
-            <TabItem Header="风扇控制">
+            <!-- ============ 散热与除尘 ============ -->
+            <TabItem Header="散热与除尘">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10">
                         <Border Style="{StaticResource CardPanel}" Margin="4,8" Padding="16">
                             <StackPanel>
-                                <TextBlock Text="全速散热（联想除尘模式）" FontSize="15" FontWeight="Bold"/>
+                                <TextBlock Text="Fn+Q 散热模式" FontSize="15" FontWeight="Bold"/>
                                 <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                           Text="用联想“除尘模式”保持风扇全速，停止后自动恢复正常调速。"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                    <Button x:Name="BtnDustStart" Content="开启全速散热" Click="BtnDustStart_Click" MinWidth="120"/>
-                                    <Button x:Name="BtnDustStop" Content="停止并恢复" Click="BtnDustStop_Click" Margin="10,0,0,0" MinWidth="120" IsEnabled="False"/>
-                                    <TextBlock x:Name="LblDustState" Text="未运行" Margin="14,6,0,0" Foreground="{StaticResource FgDimBrush}"/>
+                                           Text="切换联想的系统散热与功耗策略，等同于 Fn+Q 的模式选择。风扇仍由固件自动调节。"/>
+                                <Grid Margin="0,16,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="BtnProfileSaving" Grid.Column="0" Content="节能" Click="BtnProfileSaving_Click" Margin="0,0,10,0" MinHeight="42" IsEnabled="False"/>
+                                    <Button x:Name="BtnProfileIntelligent" Grid.Column="1" Content="智能散热" Click="BtnProfileIntelligent_Click" Margin="0,0,10,0" MinHeight="42" IsEnabled="False"/>
+                                    <Button x:Name="BtnProfilePerformance" Grid.Column="2" Content="性能" Click="BtnProfilePerformance_Click" MinHeight="42" IsEnabled="False"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                    <Button Content="读取当前模式" Click="BtnProfileRefresh_Click"/>
+                                    <TextBlock x:Name="LblProfileCurrent" Text="当前模式：读取中" Margin="14,6,0,0"/>
                                 </StackPanel>
-                                <TextBlock x:Name="LblDustHint" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource WarnBrush}" Visibility="Collapsed"
-                                           Text="未检测到 EnergyDrv 驱动。请安装“联想电脑管家”（或 Energy Management / Energy Manager 驱动包）后重启本程序。"/>
+                                <TextBlock x:Name="LblProfileState" Text="正在检查本机支持的散热模式…" Margin="0,8,0,0" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource CardPanel}" Margin="4,8" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="除尘" FontSize="15" FontWeight="Bold"/>
+                                <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
+                                           Text="点击一次，执行一次原生除尘；约 11 秒后结束，不循环触发。"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Button x:Name="BtnDustStart" Content="除尘一次" Click="BtnDustStart_Click" MinWidth="120"/>
+                                    <Button x:Name="BtnDustStop" Content="取消本次除尘" Click="BtnDustStop_Click" MinWidth="120" Margin="10,0,0,0" IsEnabled="False"/>
+                                </StackPanel>
+                                <TextBlock x:Name="LblDustState" Text="除尘：未运行" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="LblFanState" Text="尚未执行除尘。" Margin="0,6,0,0" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="LblDustHint" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource WarnBrush}" Visibility="Collapsed" Text="未检测到 EnergyDrv 驱动，除尘暂不可用。"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -79,7 +101,7 @@
                             <StackPanel>
                                 <TextBlock Text="EC 内存视图（偏移 0x00 – 0xFF）" FontSize="15" FontWeight="Bold"/>
                                 <TextBlock Margin="0,6,0,8" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"
-                                           Text="读取 EC → 改变风扇状态（Fn+Q 或全速散热）前后各设快照 → 对比差异，观察 EC 内部状态变化。"/>
+                                           Text="读取 EC → 切换 Fn+Q 散热策略前后各设快照 → 对比差异，观察 EC 内部状态变化。"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                                     <Button Content="读取 EC" Click="BtnEcRefresh_Click" MinWidth="90"/>
                                     <Button Content="设为快照 A" Click="BtnEcSnapA_Click" Margin="8,0,0,0" MinWidth="96"/>
@@ -144,10 +166,10 @@
                         <StackPanel>
                             <TextBlock Text="工作原理" FontSize="16" FontWeight="Bold"/>
                             <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                       Text="温度/功耗/频率来自 LibreHardwareMonitorLib（AMD SMU）；GPU 功耗/频率来自核显驱动；电池来自 WMI；全速散热复用联想除尘模式；EC 工具页可观察 EC 内存。"/>
+                                       Text="温度/功耗/频率来自 LibreHardwareMonitorLib（AMD SMU）；GPU 功耗/频率来自核显驱动；电池来自 WMI；散热模式对应联想 Fn+Q，除尘按次执行。"/>
                             <TextBlock Text="安全说明" FontSize="16" FontWeight="Bold" Margin="0,18,0,0"/>
                             <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                       Text="1. 全速散热默认最长 30 分钟自动停止，停止后恢复 BIOS 自动调速。&#x0a;2. WinRing0 监控驱动可能被杀毒拦截，加载失败请加白名单。"/>
+                                       Text="1. 每次除尘约 11 秒，结束或退出程序时发送停止请求。&#x0a;2. 散热模式经回读确认后才显示切换成功，程序启动和退出不会自动更改所选模式。&#x0a;3. 风扇转速由固件调节，不提供固定 RPM 或百分比设置。"/>
                             <TextBlock Text="致谢" FontSize="16" FontWeight="Bold" Margin="0,18,0,0"/>
                             <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
                                        Text="LibreHardwareMonitor（监控内核驱动）· Lenovo-Fan-Control（EnergyDrv 除尘模式协议）"/>

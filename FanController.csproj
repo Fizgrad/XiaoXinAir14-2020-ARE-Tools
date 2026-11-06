@@ -10,6 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>FanController</RootNamespace>
     <AssemblyName>FanController</AssemblyName>
+    <Version>1.1.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

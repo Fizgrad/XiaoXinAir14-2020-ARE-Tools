@@ -3,171 +3,227 @@ using System.Runtime.InteropServices;
 
 namespace FanController.Services;
 
-/// <summary>
-/// 通过联想官方 EnergyDrv 内核驱动（Lenovo ACPI-Compliant Virtual Power Controller，
-/// 随联想电脑管家 / Energy Manager 安装）复用“除尘模式”实现风扇全速散热。
-/// 协议参考开源项目 Lenovo-Fan-Control (MIT)：IOCTL 0x831020C0，输入 [6,1,mode]。
-/// 除尘模式本身是“全速约 9 秒 → 停 2 秒”的循环，这里每 8.5 秒重新触发一次保持持续全速。
-/// </summary>
+public enum FanControlMode { Normal, DustCleaning }
+
+/// <summary>单次原生除尘请求；不提供手动转速或 PWM 控制。</summary>
 public static class EnergyDrvFan
 {
-    private const string DeviceName = "\\\\.\\EnergyDrv";
-    private const uint IoctSetMode = 0x831020C0;
-    private const uint IoctGetState = 0x831020C4;
-
     public const int ModeNormal = 0;
-    public const int ModeDustFullSpeed = 1;
+    public const int ModeDustCleaning = 1;
+    public static TimeSpan DustCycleDuration { get; } = TimeSpan.FromSeconds(11);
+    private static readonly EnergyDrvController Controller = new(new NativeEnergyDrvTransport());
+    /// <summary>running 表示当前一次除尘尚未结束。</summary>
+    public static event Action<bool, string>? StateChanged
+    {
+        add => Controller.StateChanged += value;
+        remove => Controller.StateChanged -= value;
+    }
+    public static bool DriverPresent => Controller.DriverPresent;
+    public static bool IsRunning => Controller.IsRunning;
+    public static FanControlMode CurrentMode => Controller.CurrentMode;
+    public static string LastMessage => Controller.LastMessage;
+    public static bool RestorePending => Controller.RestorePending;
+    public static int? ReadState() => Controller.ReadState();
+    public static bool StartDustCleaning() => Controller.StartDustCleaning();
+    public static void Stop(string? reason = null) => Controller.Stop(reason);
+}
 
-    private static readonly object Gate = new();
-    private static Thread? _loop;
-    private static volatile bool _running;
-    private static int _normalState = int.MinValue;
-    private static DateTime _startedAt;
+internal interface IEnergyDrvTransport
+{
+    bool IsAvailable { get; }
+    bool SetMode(int mode);
+    int? ReadState();
+}
 
-    /// <summary>全速循环状态变化（参数：是否正在全速，说明文字）</summary>
-    public static event Action<bool, string>? StateChanged;
+/// <summary>所有命令串行化；会话代号使旧定时器不能再写入或复位新模式。</summary>
+internal sealed class EnergyDrvController
+{
+    private readonly object _gate = new(), _eventGate = new();
+    private readonly IEnergyDrvTransport _transport;
+    private readonly TimeProvider _time;
+    private readonly bool _automaticTick;
+    private ITimer? _timer;
+    private FanControlMode _mode;
+    private string _lastMessage = "正常（自动调速）";
+    private bool _restorePending;
+    private long _generation, _notificationVersion, _startedAt;
+    private readonly record struct Notice(long Version, bool Running, string Message);
 
-    public static bool DriverPresent
+    internal EnergyDrvController(IEnergyDrvTransport transport, TimeProvider? time = null,
+        bool automaticTick = true)
+    {
+        _transport = transport;
+        _time = time ?? TimeProvider.System;
+        _automaticTick = automaticTick;
+    }
+    public event Action<bool, string>? StateChanged;
+    public bool DriverPresent { get { lock (_gate) return Available(); } }
+    public bool IsRunning { get { lock (_gate) return _mode != FanControlMode.Normal; } }
+    public FanControlMode CurrentMode { get { lock (_gate) return _mode; } }
+    public string LastMessage { get { lock (_gate) return _lastMessage; } }
+    public bool RestorePending { get { lock (_gate) return _restorePending; } }
+    public int? ReadState() { lock (_gate) return Read(); }
+
+    public bool StartDustCleaning()
+    {
+        Notice? notice = null;
+        bool success;
+        lock (_gate)
+        {
+            // A second click must never queue another cycle, rearm the firmware,
+            // or extend the deadline of the current request.
+            if (_mode == FanControlMode.DustCleaning)
+            {
+                notice = Message("本次除尘尚未结束，未重复触发或排队");
+                success = false;
+            }
+            else if (!Available())
+            {
+                notice = Message("无法开始除尘：EnergyDrv 驱动不可用");
+                success = false;
+            }
+            else
+            {
+                CancelTimer();
+                _mode = FanControlMode.Normal;
+                if (!Restore())
+                {
+                    notice = Message("恢复正常调速失败，未开始除尘；请点击「停止除尘」重试");
+                    success = false;
+                }
+                else
+                {
+                    try
+                    {
+                        // Only one native start request. No repeated start or fan-speed hold.
+                        if (!Write(EnergyDrvFan.ModeDustCleaning))
+                            throw new InvalidOperationException("除尘启动请求失败");
+                        _mode = FanControlMode.DustCleaning;
+                        _restorePending = false;
+                        _startedAt = _time.GetTimestamp();
+                        if (_automaticTick)
+                        {
+                            var generation = _generation;
+                            var period = TimeSpan.FromMilliseconds(100);
+                            _timer = _time.CreateTimer(_ => Tick(generation), null, period, period);
+                        }
+                        notice = Message("一次除尘请求已发送，约 11 秒后结束；执行期间不会重复触发");
+                        success = true;
+                    }
+                    catch (Exception ex) { notice = StopLocked(ex.Message); success = false; }
+                }
+            }
+        }
+        Publish(notice);
+        return success;
+    }
+
+    /// <summary>中止本次除尘或重试恢复；启动程序本身不调用此方法。</summary>
+    public void Stop(string? reason = null)
+    {
+        Notice notice;
+        lock (_gate) notice = StopLocked(reason ?? "已停止除尘");
+        Publish(notice);
+    }
+
+    internal void Tick() => Tick(null); // deterministic tests use a manual clock
+    private void Tick(long? generation)
+    {
+        Notice? notice = null;
+        lock (_gate)
+        {
+            if ((generation.HasValue && generation.Value != _generation) || _mode == FanControlMode.Normal) return;
+            try
+            {
+                long now = _time.GetTimestamp();
+                if (_time.GetElapsedTime(_startedAt, now) >= EnergyDrvFan.DustCycleDuration)
+                    notice = StopLocked("本次除尘请求已结束");
+            }
+            catch (Exception ex) { notice = StopLocked("风扇控制异常：" + ex.Message); }
+        }
+        Publish(notice);
+    }
+    private Notice StopLocked(string reason)
+    {
+        CancelTimer();
+        _mode = FanControlMode.Normal;
+        return Message(Restore() ? reason + "；已发送正常调速请求" : reason + "；恢复请求失败，请点击「停止除尘」重试");
+    }
+    private void CancelTimer()
+    {
+        _generation++;
+        _timer?.Dispose();
+        _timer = null;
+    }
+    private bool Restore()
+    {
+        for (int i = 0; i < 3; i++)
+            if (Write(EnergyDrvFan.ModeNormal)) { _restorePending = false; return true; }
+        _restorePending = true;
+        return false;
+    }
+    private bool Write(int mode) { try { return _transport.SetMode(mode); } catch { return false; } }
+    private int? Read() { try { return _transport.ReadState(); } catch { return null; } }
+    private bool Available() { try { return _transport.IsAvailable; } catch { return false; } }
+    private Notice Message(string message)
+    {
+        _lastMessage = message;
+        return new Notice(++_notificationVersion, _mode != FanControlMode.Normal, message);
+    }
+    private void Publish(Notice? notice)
+    {
+        if (notice is not Notice value) return;
+        lock (_eventGate)
+        {
+            Action<bool, string>? handlers;
+            lock (_gate)
+            {
+                if (value.Version != _notificationVersion) return;
+                handlers = StateChanged;
+            }
+            if (handlers == null) return;
+            foreach (Action<bool, string> handler in handlers.GetInvocationList())
+                try { handler(value.Running, value.Message); } catch { /* UI 异常不能终止控制定时器。 */ }
+        }
+    }
+}
+
+internal sealed class NativeEnergyDrvTransport : IEnergyDrvTransport
+{
+    private const string DeviceName = "\\\\.\\EnergyDrv";
+    private const uint IoctSetMode = 0x831020C0, IoctGetState = 0x831020C4;
+    public bool IsAvailable
     {
         get
         {
-            try
-            {
-                var h = CreateFile(DeviceName, FileAccess.Read, FileShare.ReadWrite,
-                    IntPtr.Zero, FileMode.Open, FileAttributes.Normal, IntPtr.Zero);
-                if (h.IsInvalid) return false;
-                h.Close();
-                return true;
-            }
-            catch { return false; }
-        }
-    }
-
-    /// <summary>写风扇模式（0=正常 1=除尘全速）</summary>
-    public static bool SetMode(int mode)
-    {
-        try
-        {
-            using var h = CreateFile(DeviceName, FileAccess.Write, FileShare.ReadWrite,
+            using var handle = CreateFile(DeviceName, FileAccess.Read, FileShare.ReadWrite,
                 IntPtr.Zero, FileMode.Open, FileAttributes.Normal, IntPtr.Zero);
-            if (h.IsInvalid) return false;
-
-            var inBuffer = new int[] { 6, 1, mode };
-            return DeviceIoControl(h, IoctSetMode, inBuffer, (uint)(inBuffer.Length * sizeof(int)),
-                null, 0, out _, IntPtr.Zero);
+            return !handle.IsInvalid;
         }
-        catch { return false; }
     }
-
-    /// <summary>查询当前状态值（数值含义随机型 BIOS 而异，启动时记录正常值作基线）</summary>
-    public static int? ReadState()
+    public bool SetMode(int mode)
     {
-        try
-        {
-            using var h = CreateFile(DeviceName, FileAccess.Read, FileShare.ReadWrite,
-                IntPtr.Zero, FileMode.Open, FileAttributes.Normal, IntPtr.Zero);
-            if (h.IsInvalid) return null;
-
-            var inBuffer = new int[] { 14 };
-            var outBuffer = new int[1];
-            if (!DeviceIoControl(h, IoctGetState, inBuffer, sizeof(int),
-                    outBuffer, sizeof(int), out _, IntPtr.Zero)) return null;
-            return outBuffer[0];
-        }
-        catch { return null; }
+        if (mode is not (EnergyDrvFan.ModeNormal or EnergyDrvFan.ModeDustCleaning))
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        using var handle = CreateFile(DeviceName, FileAccess.Write, FileShare.ReadWrite,
+            IntPtr.Zero, FileMode.Open, FileAttributes.Normal, IntPtr.Zero);
+        if (handle.IsInvalid) return false;
+        return DeviceIoControl(handle, IoctSetMode, new[] { 6, 1, mode }, 12, null, 0, out _, IntPtr.Zero);
     }
-
-    /// <summary>开启持续全速散热（除尘循环保持）</summary>
-    public static bool StartFullSpeed(int maxMinutes)
+    public int? ReadState()
     {
-        lock (Gate)
-        {
-            if (_running) return true;
-            if (!DriverPresent) return false;
-
-            // 记录“正常模式”基线，用于判断除尘是否生效
-            SetMode(ModeNormal);
-            _normalState = ReadState() ?? int.MinValue;
-            _running = true;
-            _startedAt = DateTime.Now;
-
-            _loop = new Thread(() => DustLoop(maxMinutes))
-            {
-                IsBackground = true,
-                Name = "EnergyDrvDustLoop",
-            };
-            _loop.Start();
-            StateChanged?.Invoke(true, "全速散热已开启（除尘模式保持）");
-            return true;
-        }
+        using var handle = CreateFile(DeviceName, FileAccess.Read, FileShare.ReadWrite,
+            IntPtr.Zero, FileMode.Open, FileAttributes.Normal, IntPtr.Zero);
+        if (handle.IsInvalid) return null;
+        var output = new int[1];
+        return DeviceIoControl(handle, IoctGetState, new[] { 14 }, 4, output, 4, out var returned, IntPtr.Zero)
+            && returned == 4 ? output[0] : null;
     }
-
-    private static void DustLoop(int maxMinutes)
-    {
-        try
-        {
-            while (_running)
-            {
-                // 持续触发除尘模式直到状态离开基线
-                for (int i = 0; i < 200 && _running; i++)
-                {
-                    SetMode(ModeDustFullSpeed);
-                    var st = ReadState();
-                    if (st != null && _normalState != int.MinValue && st != _normalState) break;
-                    Thread.Sleep(10);
-                }
-                if (!_running) break;
-
-                if (maxMinutes > 0 && (DateTime.Now - _startedAt).TotalMinutes > maxMinutes)
-                {
-                    StopInternal($"已达最长 {maxMinutes} 分钟，自动停止");
-                    return;
-                }
-                Thread.Sleep(7000); // 除尘全速段约 9 秒，提前重触发避免进入停止相位造成掉速
-            }
-        }
-        catch
-        {
-            StopInternal("除尘循环异常退出，已恢复正常模式");
-        }
-    }
-
-    /// <summary>停止全速并恢复正常模式</summary>
-    public static void Stop(string? reason = null)
-    {
-        lock (Gate)
-        {
-            if (!_running) return;
-            _running = false;
-            StopInternal(reason ?? "已恢复正常模式");
-        }
-    }
-
-    private static void StopInternal(string reason)
-    {
-        _running = false;
-        try
-        {
-            for (int i = 0; i < 50; i++)
-            {
-                SetMode(ModeNormal);
-                var st = ReadState();
-                if (st != null && st == _normalState) break;
-                Thread.Sleep(10);
-            }
-        }
-        catch { }
-        StateChanged?.Invoke(false, reason);
-    }
-
-    public static bool IsRunning => _running;
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
         string lpFileName, FileAccess dwDesiredAccess, FileShare dwShareMode,
         IntPtr lpSecurityAttributes, FileMode dwCreationDisposition,
         FileAttributes dwFlagsAndAttributes, IntPtr hTemplateFile);
-
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeviceIoControl(

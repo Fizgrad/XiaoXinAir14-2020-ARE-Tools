@@ -11,9 +11,6 @@ public class AppSettings
     /// <summary>历史曲线保留的采样点数</summary>
     public int HistoryPoints { get; set; } = 300;
 
-    /// <summary>全速散热（除尘模式）最长持续时间（分钟），0 = 不限制</summary>
-    public int MaxDustMinutes { get; set; } = 30;
-
     /// <summary>点窗口关闭按钮时：true = 隐藏到托盘继续运行，false = 直接退出</summary>
     public bool CloseToTray { get; set; } = true;
 

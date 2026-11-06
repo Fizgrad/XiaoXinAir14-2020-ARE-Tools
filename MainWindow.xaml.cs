@@ -12,6 +12,10 @@ public partial class MainWindow : Window
 {
     private readonly AppSettings _settings;
     private readonly MonitorService _monitor;
+    private readonly bool _energyAvailable;
+    private readonly ThermalProfileService _thermalProfiles = new();
+    private readonly System.Windows.Threading.DispatcherTimer _profileTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    private bool _profileRequestInProgress;
     private volatile SensorSnapshot? _lastSnap;
 
     // ---- 行式仪表盘 ----
@@ -32,6 +36,7 @@ public partial class MainWindow : Window
     // ---- 托盘 ----
     private System.Windows.Forms.NotifyIcon? _tray;
     private bool _reallyExit;
+    private volatile bool _shuttingDown;
 
     // ---- 游戏内悬浮窗 ----
     private OverlayWindow? _overlay;
@@ -62,20 +67,23 @@ public partial class MainWindow : Window
         _monitor.StatusChanged += OnMonitorStatus;
         _monitor.Updated += OnSnapshot;
 
-        EnergyDrvFan.StateChanged += OnDustState;
+        EnergyDrvFan.StateChanged += OnFanState;
 
         var admin = MonitorService.IsAdministrator();
         SetChip(ChipAdmin, ChipAdminText, admin ? "管理员：是" : "管理员：否（功能受限）", admin);
 
-        bool energy = EnergyDrvFan.DriverPresent;
-        SetChip(ChipEnergy, ChipEnergyText, energy ? "EnergyDrv：可用" : "EnergyDrv：缺失", energy);
-        BtnDustStart.IsEnabled = energy;
-        if (!energy) LblDustHint.Visibility = Visibility.Visible;
+        _energyAvailable = EnergyDrvFan.DriverPresent;
+        SetChip(ChipEnergy, ChipEnergyText, _energyAvailable ? "EnergyDrv：可用" : "EnergyDrv：缺失", _energyAvailable);
+        if (!_energyAvailable) LblDustHint.Visibility = Visibility.Visible;
+        UpdateFanControls();
+        _profileTimer.Tick += async (_, _) => await RefreshThermalProfileAsync();
 
         // 窗口先显示，驱动加载等重活放到 Loaded 之后，避免卡住启动
         Loaded += (_, _) =>
         {
             App.Log("窗口已显示，开始加载监控");
+            _profileTimer.Start();
+            _ = RefreshThermalProfileAsync();
             Task.Run(() =>
             {
                 try { _monitor.Start(); }
@@ -107,7 +115,9 @@ public partial class MainWindow : Window
             menu.Items.Add("退出", null, (_, _) =>
             {
                 _reallyExit = true;
-                Close();
+                // Exit means the whole application, including any overlay windows.
+                try { Shutdown(); }
+                finally { Application.Current.Shutdown(); }
             });
             _tray.ContextMenuStrip = menu;
 
@@ -190,9 +200,16 @@ public partial class MainWindow : Window
 
     private void Shutdown()
     {
+        if (_shuttingDown) return;
+        _shuttingDown = true;
+        _profileTimer.Stop();
         _reallyExit = true;
         try { _tray?.Dispose(); } catch { }
-        try { EnergyDrvFan.Stop("程序退出"); } catch { }
+        _monitor.StatusChanged -= OnMonitorStatus;
+        _monitor.Updated -= OnSnapshot;
+        EnergyDrvFan.StateChanged -= OnFanState;
+        try { if (EnergyDrvFan.IsRunning || EnergyDrvFan.RestorePending) EnergyDrvFan.Stop("程序退出"); } catch { }
+        try { _overlay?.Close(); _overlay = null; } catch { }
         try { _monitor.Dispose(); } catch { }
         _settings.Save();
     }
@@ -201,8 +218,10 @@ public partial class MainWindow : Window
 
     private void OnMonitorStatus(string msg)
     {
+        if (_shuttingDown) return;
         Dispatcher.BeginInvoke(() =>
         {
+            if (_shuttingDown) return;
             bool ok = EcIO.IsAvailable;
             SetChip(ChipDriver, ChipDriverText, "监控驱动：" + (msg.Length > 60 ? msg[..60] + "…" : msg), ok);
             SetChip(ChipEc, ChipEcText, "EC：" + EcIO.Status, ok);
@@ -211,9 +230,11 @@ public partial class MainWindow : Window
 
     private void OnSnapshot(SensorSnapshot s)
     {
+        if (_shuttingDown) return;
         _lastSnap = s;
         Dispatcher.BeginInvoke(() =>
         {
+            if (_shuttingDown) return;
             SetRow("CpuTemp", s.CpuTemp, v => v.ToString("0") + " °C",
                 v => v >= 90 ? Bad : v >= 75 ? Warn : Fg, _monitor.CpuName);
             SetRow("CpuPower", s.PackagePower, v => v.ToString("0.0") + " W", null,
@@ -250,16 +271,26 @@ public partial class MainWindow : Window
                 _overlay.ApplyPosition();
             }
 
-            UpdateFanModeChip();
+            UpdateFanControls();
         });
     }
 
     private void UpdateFanModeChip()
     {
-        if (EnergyDrvFan.IsRunning)
-            SetChip(ChipFanMode, ChipFanModeText, "风扇：全速（除尘）", true);
-        else
-            SetChip(ChipFanMode, ChipFanModeText, "风扇：EC 自动", null);
+        if (EnergyDrvFan.RestorePending)
+        {
+            SetChip(ChipFanMode, ChipFanModeText, "风扇：恢复失败", false);
+            return;
+        }
+        switch (EnergyDrvFan.CurrentMode)
+        {
+            case FanControlMode.DustCleaning:
+                SetChip(ChipFanMode, ChipFanModeText, "风扇：除尘", null);
+                break;
+            default:
+                SetChip(ChipFanMode, ChipFanModeText, "风扇：EC 自动", null);
+                break;
+        }
     }
 
     private static readonly (string Id, string Label, Color Line)[] RowSpecs =
@@ -409,25 +440,103 @@ public partial class MainWindow : Window
     private static readonly Brush Fg = (Brush)Application.Current.Resources["FgBrush"];
     private static readonly Brush FgDim = (Brush)Application.Current.Resources["FgDimBrush"];
 
-    // ---------------- 全速散热 ----------------
+    // ---------------- 散热模式与单次除尘 ----------------
+
+    private async void BtnProfileSaving_Click(object sender, RoutedEventArgs e) =>
+        await SetThermalProfileAsync(ThermalProfile.BatterySaving);
+
+    private async void BtnProfileIntelligent_Click(object sender, RoutedEventArgs e) =>
+        await SetThermalProfileAsync(ThermalProfile.IntelligentCooling);
+
+    private async void BtnProfilePerformance_Click(object sender, RoutedEventArgs e) =>
+        await SetThermalProfileAsync(ThermalProfile.ExtremePerformance);
+
+    private async void BtnProfileRefresh_Click(object sender, RoutedEventArgs e) => await RefreshThermalProfileAsync();
+
+    private Task RefreshThermalProfileAsync() => RunThermalProfileRequestAsync(_thermalProfiles.Refresh);
+
+    private Task SetThermalProfileAsync(ThermalProfile profile) =>
+        RunThermalProfileRequestAsync(() => _thermalProfiles.SetProfile(profile));
+
+    private async Task RunThermalProfileRequestAsync(Func<bool> request)
+    {
+        if (_shuttingDown || _profileRequestInProgress) return;
+        _profileRequestInProgress = true;
+        BtnProfileSaving.IsEnabled = BtnProfileIntelligent.IsEnabled = BtnProfilePerformance.IsEnabled = false;
+        try
+        {
+            await Task.Run(request);
+            if (_shuttingDown) return;
+            var profile = _thermalProfiles.CurrentProfile;
+            string label = profile switch
+            {
+                ThermalProfile.BatterySaving => "节能",
+                ThermalProfile.IntelligentCooling => "智能散热",
+                ThermalProfile.ExtremePerformance => "性能",
+                _ => "未知",
+            };
+            LblProfileCurrent.Text = "当前模式：" + label;
+            LblProfileState.Text = _thermalProfiles.LastMessage;
+            foreach (var (button, value) in new[]
+            {
+                (BtnProfileSaving, ThermalProfile.BatterySaving),
+                (BtnProfileIntelligent, ThermalProfile.IntelligentCooling),
+                (BtnProfilePerformance, ThermalProfile.ExtremePerformance),
+            })
+            {
+                button.IsEnabled = _thermalProfiles.IsSupported;
+                bool selected = profile == value;
+                button.Background = selected ? new SolidColorBrush(Color.FromRgb(46, 74, 90)) : (Brush)FindResource("ChipBrush");
+                button.BorderBrush = (Brush)FindResource(selected ? "AccentBrush" : "CardBorderBrush");
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!_shuttingDown)
+            {
+                LblProfileCurrent.Text = "当前模式：读取失败";
+                LblProfileState.Text = ex.Message;
+                App.Log("散热模式操作失败: " + ex);
+            }
+        }
+        finally { _profileRequestInProgress = false; }
+    }
 
     private void BtnDustStart_Click(object sender, RoutedEventArgs e)
     {
-        if (!EnergyDrvFan.StartFullSpeed(_settings.MaxDustMinutes))
-            LblDustState.Text = "启动失败：EnergyDrv 驱动不可用";
+        EnergyDrvFan.StartDustCleaning();
+        LblFanState.Text = EnergyDrvFan.LastMessage;
+        UpdateFanControls();
     }
 
-    private void BtnDustStop_Click(object sender, RoutedEventArgs e) => EnergyDrvFan.Stop("手动停止");
+    private void BtnDustStop_Click(object sender, RoutedEventArgs e)
+    {
+        EnergyDrvFan.Stop("已停止除尘");
+        LblFanState.Text = EnergyDrvFan.LastMessage;
+        UpdateFanControls();
+    }
 
-    private void OnDustState(bool running, string msg)
+    private void OnFanState(bool running, string msg)
     {
         Dispatcher.BeginInvoke(() =>
         {
-            LblDustState.Text = msg;
-            BtnDustStart.IsEnabled = !running && EnergyDrvFan.DriverPresent;
-            BtnDustStop.IsEnabled = running;
-            UpdateFanModeChip();
+            // A newer selection may already have replaced this queued event.
+            LblFanState.Text = EnergyDrvFan.LastMessage;
+            UpdateFanControls();
         });
+    }
+
+    private void UpdateFanControls()
+    {
+        var mode = EnergyDrvFan.CurrentMode;
+        bool restoring = EnergyDrvFan.RestorePending;
+        LblFanState.Foreground = restoring ? Bad : Fg;
+        BtnDustStart.IsEnabled = _energyAvailable && mode != FanControlMode.DustCleaning;
+        BtnDustStop.IsEnabled = _energyAvailable && (mode == FanControlMode.DustCleaning || restoring);
+        LblDustState.Text = mode == FanControlMode.DustCleaning
+            ? "除尘：正在执行本次请求，约 11 秒后结束"
+            : restoring ? "除尘：停止请求失败，请点击取消本次除尘重试" : "除尘：未运行";
+        UpdateFanModeChip();
     }
 
     private void ToggleOverlay()

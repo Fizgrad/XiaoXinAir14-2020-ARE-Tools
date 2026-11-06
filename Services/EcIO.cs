@@ -26,7 +26,7 @@ public static class EcIO
     private static PropertyInfo? _isOpen;
     private static MethodInfo? _open;
 
-    /// <summary>ECMM 共享内存邮箱物理基址（来自本机 DSDT：OperationRegion ECMM = SystemMemory 0xFE0B0800, 16 字节）</summary>
+    /// <summary>ECMM 共享内存基址（本机 DSDT：SystemMemory 0xFE0B0800，区域长度 0x1000）</summary>
     public const ulong EcmmMailboxBase = 0xFE0B0800;
     /// <summary>ERPM 字段在邮箱内的字节偏移（DSDT Field 解析：bit 48 = byte 6, 8 位宽）</summary>
     public const int EcmmRpmOffset = 6;
@@ -181,6 +181,7 @@ public static class EcIO
     /// <summary>读物理内存（MMIO）一段字节，走 WinRing0 驱动。失败返回 null。</summary>
     public static byte[]? ReadMmio(ulong address, int count)
     {
+        if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
         if (!MmioAvailable) return null;
         lock (Gate)
         {
@@ -191,7 +192,8 @@ public static class EcIO
                     var gm = _readMemBytes.MakeGenericMethod(typeof(byte));
                     var buf = new byte[count];
                     var args = new object[] { address, buf };
-                    gm.Invoke(null, args);
+                    if (gm.Invoke(null, args) is not true)
+                        return Fail<byte[]?>("MMIO 读取失败：驱动未返回有效数据");
                     return (byte[])args[1];
                 }
                 var g1 = _readMemByte!.MakeGenericMethod(typeof(byte));
@@ -199,7 +201,8 @@ public static class EcIO
                 for (int i = 0; i < count; i++)
                 {
                     var a = new object[] { address + (ulong)i, (byte)0 };
-                    g1.Invoke(null, a);
+                    if (g1.Invoke(null, a) is not true)
+                        return Fail<byte[]?>("MMIO 读取失败：驱动未返回有效数据");
                     data[i] = (byte)a[1];
                 }
                 return data;

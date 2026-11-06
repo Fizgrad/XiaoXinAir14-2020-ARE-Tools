@@ -9,6 +9,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="ControlChecks\**" />
+    <Compile Remove="StartupChecks\**" />
+    <Compile Remove="ProfileChecks\**" />
+    <Compile Remove="exploration\**" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.8.8" />
     <ProjectReference Include="..\FanController.csproj" />
   </ItemGroup>

@@ -7,5 +7,6 @@ FanDiag/obj/
 FanDiag/diag.txt
 FanDiag/bt.txt
 FanDiag/dsdt.aml
+FanDiag/exploration/
 *.user
 .vs/

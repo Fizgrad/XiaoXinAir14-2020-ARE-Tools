@@ -6,7 +6,7 @@ namespace FanController.Services;
 /// <summary>一轮采集的传感器快照（数值均为最新值，null 表示不可用）</summary>
 public class SensorSnapshot
 {
-    public DateTime Time { get; } = DateTime.Now;
+    public DateTime Time { get; init; } = DateTime.Now;
     public float? CpuTemp { get; init; }
     public float? GpuTemp { get; init; }
     public float? PackagePower { get; init; }
@@ -174,7 +174,17 @@ public class MonitorService : IDisposable
 
     private SensorSnapshot Collect()
     {
-        try { _cpu?.Update(); } catch { }
+        var sampleTime = DateTime.Now;
+        bool cpuUpdated = false;
+        try
+        {
+            if (_cpu != null)
+            {
+                _cpu.Update();
+                cpuUpdated = true;
+            }
+        }
+        catch { }
         try { _gpu?.Update(); } catch { }
         // 个别 SMU 传感器出现较晚，缺失时再解析一次
         if (_pkgPower == null || _socPower == null || _cpuTemp == null) ResolveSensors();
@@ -194,7 +204,9 @@ public class MonitorService : IDisposable
 
         return new SensorSnapshot
         {
-            CpuTemp = _cpuTemp?.Value,
+            Time = sampleTime,
+            // Do not present a cached temperature as a new reading after a failed update.
+            CpuTemp = cpuUpdated ? _cpuTemp?.Value : null,
             GpuTemp = _gpuTemp?.Value,
             PackagePower = _pkgPower?.Value,
             SocPower = _socPower?.Value,

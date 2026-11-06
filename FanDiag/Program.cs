@@ -1,6 +1,16 @@
 using LibreHardwareMonitor.Hardware;
 using FanController.Services;
 
+if (args is ["--mmio-check"])
+{
+    // No fan-control calls. A failed driver read must remain unavailable, never become a fake zero.
+    EcIO.Init();
+    WL($"EC: {EcIO.Status}; MMIO API: {EcIO.MmioAvailable}");
+    var bytes = EcIO.ReadMmio(EcIO.EcmmMailboxBase, 32);
+    WL(bytes == null ? $"MMIO unavailable: {EcIO.Status}" : BitConverter.ToString(bytes));
+    return;
+}
+
 // 诊断工具：打印所有传感器原始读数 + EC 原始字节，用于修正主程序的传感器映射
 
 var computer = new Computer
