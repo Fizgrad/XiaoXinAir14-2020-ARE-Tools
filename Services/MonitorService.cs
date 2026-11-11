@@ -18,11 +18,12 @@ public class SensorSnapshot
     public float? GpuClockMHz { get; init; }
     public float? BatteryPercent { get; init; }
     public float? BatteryPowerW { get; init; }
+    public BatteryReading? Battery { get; init; }
 }
 
 /// <summary>
 /// 基于 LibreHardwareMonitorLib 0.8.8 的硬件监控服务（WinRing0 驱动内嵌，开箱即用）。
-/// 温度/功耗/频率来自 AMD SMU；电池数据 LHM 0.8.8 不支持，改走 WMI。
+/// 温度/功耗/频率来自 AMD SMU；电池来自 Windows 电池类只读接口。
 /// </summary>
 public class MonitorService : IDisposable
 {
@@ -200,7 +201,7 @@ public class MonitorService : IDisposable
                 if (s.Value is float v && (cpuLoad == null || v > cpuLoad)) cpuLoad = v;
         }
 
-        var (batPct, batPower) = ReadBattery();
+        var battery = BatteryReader.Read();
 
         return new SensorSnapshot
         {
@@ -215,51 +216,10 @@ public class MonitorService : IDisposable
             GpuLoad = _gpuLoad?.Value,
             GpuPowerW = _gpuPower?.Value,
             GpuClockMHz = _gpuClock?.Value,
-            BatteryPercent = batPct,
-            BatteryPowerW = batPower,
+            BatteryPercent = battery.Percent,
+            BatteryPowerW = battery.PowerW,
+            Battery = battery,
         };
-    }
-
-    /// <summary>WMI 读电池：电量来自 root\wmi BatteryStatus/Win32_Battery，放电率为 BatteryStatus.DischargeRate</summary>
-    private static (float? pct, float? watts) ReadBattery()
-    {
-        try
-        {
-            float? pct = null, watts = null;
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                "root\\wmi", "SELECT ChargeRate, DischargeRate, Charging, Discharging, PowerOnline, Voltage FROM BatteryStatus");
-            foreach (var o in searcher.Get())
-            {
-                bool charging = Convert.ToBoolean(o["Charging"]);
-                bool discharging = Convert.ToBoolean(o["Discharging"]);
-                if (charging)
-                {
-                    if (o["ChargeRate"] is int cr && cr != 0) watts = -cr / 1000f;
-                }
-                else if (discharging)
-                {
-                    if (o["DischargeRate"] is int dr && dr != 0) watts = dr / 1000f;
-                }
-                else
-                {
-                    watts = 0;
-                }
-                break; // 单电池
-            }
-
-            using var pctSearcher = new System.Management.ManagementObjectSearcher(
-                "root\\cimv2", "SELECT EstimatedChargeRemaining FROM Win32_Battery");
-            foreach (var o in pctSearcher.Get())
-            {
-                pct = Convert.ToSingle(o["EstimatedChargeRemaining"]);
-                break;
-            }
-            return (pct, watts);
-        }
-        catch
-        {
-            return (null, null);
-        }
     }
 
     public void Dispose()

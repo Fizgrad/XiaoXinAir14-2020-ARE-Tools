@@ -94,7 +94,7 @@ public sealed class ThermalProfileService
             _identityDescription = identity.Description;
         }
         if (_identitySupported != true)
-            return Fail("当前机型或 BIOS 尚未验证 Fn+Q 接口：" + _identityDescription);
+            return Fail("当前机型或 BIOS 未适配 Fn+Q：" + _identityDescription);
         if (_supported) return true;
 
         // DYTC(0) is a capability query. DYTC(2) is deliberately never used:
@@ -102,7 +102,7 @@ public sealed class ThermalProfileService
         if (!_transport.TryCall(0, out uint capability, out string error))
             return Fail("读取 Fn+Q 接口能力失败：" + error);
         if ((capability & 0xFF) != 1 || (capability & 0x100) == 0 || (capability >> 28) != 5)
-            return Fail($"Fn+Q 接口能力未通过验证（返回 0x{capability:X8}）");
+            return Fail($"Fn+Q 接口返回异常（0x{capability:X8}）");
         _supported = true;
         return true;
     }
@@ -137,7 +137,7 @@ public sealed class ThermalProfileService
         _ => "未知",
     };
 
-    private static (bool Supported, string Description) ReadMachineIdentity()
+    internal static (bool Supported, string Description) ReadMachineIdentity()
     {
         string manufacturer = "", model = "", bios = "";
         var options = new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(10) };

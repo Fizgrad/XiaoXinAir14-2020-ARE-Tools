@@ -5,6 +5,8 @@ namespace FanController.Models;
 
 public class AppSettings
 {
+    // In-process diagnostics can isolate settings without modifying the user's configuration.
+    internal static string? ConfigDirectoryOverride { get; set; }
     /// <summary>传感器轮询间隔（毫秒）</summary>
     public int PollIntervalMs { get; set; } = 1000;
 
@@ -20,6 +22,11 @@ public class AppSettings
     /// <summary>悬浮窗角落：0 左上 1 右上 2 左下 3 右下</summary>
     public int OverlayCorner { get; set; } = 0;
 
+    public AutomationSettings Automation { get; set; } = new();
+    public int BacklightIdleSeconds { get; set; } = 0;
+    public bool RecordBatteryHistory { get; set; } = true;
+    public string RyzenAdjPath { get; set; } = "";
+
     /// <summary>仪表盘行顺序（自上而下），可在界面中调整</summary>
     public List<string> DashboardOrder { get; set; } = new()
     {
@@ -27,7 +34,7 @@ public class AppSettings
         "CpuClock", "CpuLoad", "Battery", "SysInfo",
     };
 
-    public string ConfigDir => Path.Combine(
+    public string ConfigDir => ConfigDirectoryOverride ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FanController");
 
     public string ConfigPath => Path.Combine(ConfigDir, "settings.json");
@@ -46,7 +53,15 @@ public class AppSettings
             if (File.Exists(path))
             {
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path));
-                if (s != null) return s;
+                if (s != null)
+                {
+                    s.Automation ??= new();
+                    s.Automation.Normalize();
+                    s.DashboardOrder ??= new();
+                    s.RyzenAdjPath ??= "";
+                    s.BacklightIdleSeconds = Math.Clamp(s.BacklightIdleSeconds, 0, 3600);
+                    return s;
+                }
             }
         }
         catch
@@ -56,16 +71,25 @@ public class AppSettings
         return new AppSettings();
     }
 
-    public void Save()
+    public void Save() => TrySave(out _);
+
+    public bool TrySave(out string error)
     {
+        string? temporary = null;
         try
         {
             Directory.CreateDirectory(ConfigDir);
-            File.WriteAllText(ConfigPath, JsonSerializer.Serialize(this, JsonOpts));
+            temporary = Path.Combine(ConfigDir, "settings-" + Guid.NewGuid().ToString("N") + ".tmp");
+            File.WriteAllText(temporary, JsonSerializer.Serialize(this, JsonOpts));
+            File.Move(temporary, ConfigPath, true);
+            error = "";
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // 保存失败不致命
+            error = ex.Message;
+            return false;
         }
+        finally { if (temporary != null) { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } } }
     }
 }

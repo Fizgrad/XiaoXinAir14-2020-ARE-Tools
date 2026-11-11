@@ -10,3 +10,4 @@ FanDiag/dsdt.aml
 FanDiag/exploration/
 *.user
 .vs/
+tools/ryzenadj/

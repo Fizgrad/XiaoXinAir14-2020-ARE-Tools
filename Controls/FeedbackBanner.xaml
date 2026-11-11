@@ -1,0 +1,34 @@
+<UserControl x:Class="FanController.Controls.FeedbackBanner"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border x:Name="Frame" Background="#FF202831" BorderBrush="#FF3B5265" BorderThickness="1" CornerRadius="8" Padding="12,8">
+        <StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock x:Name="Symbol" Text="●" FontSize="17" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="Title" Grid.Column="1" Text="操作反馈" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TimeLabel" Grid.Column="2" Text="就绪" Foreground="{StaticResource FgDimBrush}" Margin="14,0,0,0" FontSize="11" VerticalAlignment="Center"/>
+            </Grid>
+            <TextBlock x:Name="Detail" Text="等待操作" Margin="26,3,0,0"
+                       Foreground="{StaticResource FgDimBrush}" FontSize="12" TextWrapping="Wrap" MaxHeight="38" TextTrimming="CharacterEllipsis"/>
+            <ProgressBar x:Name="Progress" IsIndeterminate="True" Height="3" Margin="26,7,0,0" Visibility="Collapsed"
+                         Foreground="{StaticResource AccentBrush}" Background="#FF30343B" BorderThickness="0"/>
+            <Expander x:Name="HistoryExpander" Header="最近操作" Foreground="{StaticResource FgDimBrush}" FontSize="11" Margin="26,5,0,0" Visibility="Collapsed">
+                <ScrollViewer MaxHeight="155" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="HistoryItems">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="#FF3A414A" BorderThickness="0,0,0,1" Padding="0,6">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding HistoryTitle}" FontWeight="SemiBold" FontSize="12" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding Detail}" Foreground="{StaticResource FgDimBrush}" Margin="0,3,0,0" FontSize="11" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Expander>
+        </StackPanel>
+    </Border>
+</UserControl>

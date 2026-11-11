@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:FanController"
         xmlns:ctrl="clr-namespace:FanController.Controls"
+        xmlns:views="clr-namespace:FanController.Views"
         Title="FanController — 小新风扇控制与硬件监控"
         Icon="app.ico"
         Height="780" Width="1180" MinHeight="720" MinWidth="1040"
@@ -40,6 +41,8 @@
             </DockPanel>
         </Border>
 
+        <ctrl:FeedbackBanner x:Name="ActionFeedback" DockPanel.Dock="Top" Margin="16,6,16,4"/>
+
         <TabControl x:Name="MainTabs" Margin="8,4,8,8">
 
             <!-- ============ 仪表盘 ============ -->
@@ -56,8 +59,6 @@
                         <Border Style="{StaticResource CardPanel}" Margin="4,8" Padding="16">
                             <StackPanel>
                                 <TextBlock Text="Fn+Q 散热模式" FontSize="15" FontWeight="Bold"/>
-                                <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                           Text="切换联想的系统散热与功耗策略，等同于 Fn+Q 的模式选择。风扇仍由固件自动调节。"/>
                                 <Grid Margin="0,16,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -69,28 +70,34 @@
                                     <Button x:Name="BtnProfilePerformance" Grid.Column="2" Content="性能" Click="BtnProfilePerformance_Click" MinHeight="42" IsEnabled="False"/>
                                 </Grid>
                                 <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-                                    <Button Content="读取当前模式" Click="BtnProfileRefresh_Click"/>
-                                    <TextBlock x:Name="LblProfileCurrent" Text="当前模式：读取中" Margin="14,6,0,0"/>
+                                    <Button x:Name="BtnProfileRefresh" Content="读取当前模式" Click="BtnProfileRefresh_Click"/>
+                                    <TextBlock x:Name="LblProfileCurrent" Text="当前生效：读取中" FontSize="17" FontWeight="SemiBold" Margin="14,4,0,0"/>
                                 </StackPanel>
                                 <TextBlock x:Name="LblProfileState" Text="正在检查本机支持的散热模式…" Margin="0,8,0,0" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="LblProfileCheckedAt" Text="尚未更新" Foreground="{StaticResource FgDimBrush}" FontSize="11" Margin="0,5,0,0"/>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardPanel}" Margin="4,8" Padding="16">
                             <StackPanel>
                                 <TextBlock Text="除尘" FontSize="15" FontWeight="Bold"/>
                                 <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                           Text="点击一次，执行一次原生除尘；约 11 秒后结束，不循环触发。"/>
+                                           Text="每次约 11 秒。"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                                     <Button x:Name="BtnDustStart" Content="除尘一次" Click="BtnDustStart_Click" MinWidth="120"/>
                                     <Button x:Name="BtnDustStop" Content="取消本次除尘" Click="BtnDustStop_Click" MinWidth="120" Margin="10,0,0,0" IsEnabled="False"/>
                                 </StackPanel>
-                                <TextBlock x:Name="LblDustState" Text="除尘：未运行" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="LblDustState" Text="除尘：未运行" FontSize="16" FontWeight="SemiBold" Margin="0,10,0,0" TextWrapping="Wrap"/>
+                                <ProgressBar x:Name="DustProgress" Height="5" Maximum="11" Margin="0,8,0,0" Visibility="Collapsed" Foreground="{StaticResource AccentBrush}"/>
                                 <TextBlock x:Name="LblFanState" Text="尚未执行除尘。" Margin="0,6,0,0" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"/>
                                 <TextBlock x:Name="LblDustHint" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource WarnBrush}" Visibility="Collapsed" Text="未检测到 EnergyDrv 驱动，除尘暂不可用。"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="小新控制中心">
+                <views:DeviceCenterView x:Name="ControlCenter"/>
             </TabItem>
 
             <!-- ============ EC 工具 ============ -->
@@ -102,13 +109,14 @@
                                 <TextBlock Text="EC 内存视图（偏移 0x00 – 0xFF）" FontSize="15" FontWeight="Bold"/>
                                 <TextBlock Margin="0,6,0,8" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap"
                                            Text="读取 EC → 切换 Fn+Q 散热策略前后各设快照 → 对比差异，观察 EC 内部状态变化。"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <StackPanel x:Name="EcActions" Orientation="Horizontal" Margin="0,0,0,10">
                                     <Button Content="读取 EC" Click="BtnEcRefresh_Click" MinWidth="90"/>
                                     <Button Content="设为快照 A" Click="BtnEcSnapA_Click" Margin="8,0,0,0" MinWidth="96"/>
                                     <Button Content="设为快照 B" Click="BtnEcSnapB_Click" Margin="8,0,0,0" MinWidth="96"/>
                                     <Button Content="对比 A/B" Click="BtnEcDiff_Click" Margin="8,0,0,0" MinWidth="90"/>
                                     <TextBlock x:Name="LblEcView" Margin="14,7,0,0" Foreground="{StaticResource FgDimBrush}" Text="未读取"/>
                                 </StackPanel>
+                                <TextBlock x:Name="LblEcSnapshots" Text="快照 A：未设置    快照 B：未设置" FontSize="12" Foreground="{StaticResource FgDimBrush}" Margin="0,0,0,10"/>
                                 <ItemsControl x:Name="EcDump">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
@@ -164,15 +172,9 @@
                         </Border>
                         <Border Style="{StaticResource CardPanel}" Margin="0,8,0,0" Padding="20">
                         <StackPanel>
-                            <TextBlock Text="工作原理" FontSize="16" FontWeight="Bold"/>
+                            <TextBlock Text="致谢" FontSize="16" FontWeight="Bold"/>
                             <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                       Text="温度/功耗/频率来自 LibreHardwareMonitorLib（AMD SMU）；GPU 功耗/频率来自核显驱动；电池来自 WMI；散热模式对应联想 Fn+Q，除尘按次执行。"/>
-                            <TextBlock Text="安全说明" FontSize="16" FontWeight="Bold" Margin="0,18,0,0"/>
-                            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                       Text="1. 每次除尘约 11 秒，结束或退出程序时发送停止请求。&#x0a;2. 散热模式经回读确认后才显示切换成功，程序启动和退出不会自动更改所选模式。&#x0a;3. 风扇转速由固件调节，不提供固定 RPM 或百分比设置。"/>
-                            <TextBlock Text="致谢" FontSize="16" FontWeight="Bold" Margin="0,18,0,0"/>
-                            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="{StaticResource FgDimBrush}"
-                                       Text="LibreHardwareMonitor（监控内核驱动）· Lenovo-Fan-Control（EnergyDrv 除尘模式协议）"/>
+                                       Text="LibreHardwareMonitor · Lenovo-Fan-Control · OpenLenovoSettings（设备协议参考）· RyzenAdj（功耗调节，LGPL-3.0）"/>
                         </StackPanel>
                         </Border>
                     </StackPanel>

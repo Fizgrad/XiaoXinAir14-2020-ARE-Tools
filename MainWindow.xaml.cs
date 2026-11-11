@@ -16,6 +16,11 @@ public partial class MainWindow : Window
     private readonly ThermalProfileService _thermalProfiles = new();
     private readonly System.Windows.Threading.DispatcherTimer _profileTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool _profileRequestInProgress;
+    private bool _initializing = true, _updatingUiSettings, _ecRequestInProgress;
+    private bool _dustCompletionNotice;
+    private long? _dustStartedAt;
+    private DateTimeOffset? _dustLastFinished;
+    private readonly System.Windows.Threading.DispatcherTimer _dustUiTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private volatile SensorSnapshot? _lastSnap;
 
     // ---- 行式仪表盘 ----
@@ -53,6 +58,8 @@ public partial class MainWindow : Window
 
         _settings = AppSettings.Load();
         DataContext = _settings;
+        ControlCenter.FeedbackPublished += message => ActionFeedback.Show(message);
+        ControlCenter.Initialize(_settings, _thermalProfiles, () => _ = RefreshThermalProfileAsync());
 
         for (int i = 0; i < 256; i++) _ecCells.Add(new EcCell(i));
         EcDump.ItemsSource = _ecCells;
@@ -77,12 +84,15 @@ public partial class MainWindow : Window
         if (!_energyAvailable) LblDustHint.Visibility = Visibility.Visible;
         UpdateFanControls();
         _profileTimer.Tick += async (_, _) => await RefreshThermalProfileAsync();
+        _dustUiTimer.Tick += (_, _) => UpdateFanControls();
 
         // 窗口先显示，驱动加载等重活放到 Loaded 之后，避免卡住启动
         Loaded += (_, _) =>
         {
             App.Log("窗口已显示，开始加载监控");
+            SetOverlayVisible(_settings.OverlayEnabled);
             _profileTimer.Start();
+            ControlCenter.Start();
             _ = RefreshThermalProfileAsync();
             Task.Run(() =>
             {
@@ -94,6 +104,7 @@ public partial class MainWindow : Window
         Closed += (_, _) => Shutdown();
         App.Log("MainWindow 构造完成");
         InitTray();
+        _initializing = false;
     }
 
     /// <summary>系统托盘：关窗最小化到托盘，双击图标恢复，右键菜单可退出</summary>
@@ -203,6 +214,8 @@ public partial class MainWindow : Window
         if (_shuttingDown) return;
         _shuttingDown = true;
         _profileTimer.Stop();
+        _dustUiTimer.Stop();
+        ControlCenter.Stop();
         _reallyExit = true;
         try { _tray?.Dispose(); } catch { }
         _monitor.StatusChanged -= OnMonitorStatus;
@@ -223,8 +236,10 @@ public partial class MainWindow : Window
         {
             if (_shuttingDown) return;
             bool ok = EcIO.IsAvailable;
-            SetChip(ChipDriver, ChipDriverText, "监控驱动：" + (msg.Length > 60 ? msg[..60] + "…" : msg), ok);
-            SetChip(ChipEc, ChipEcText, "EC：" + EcIO.Status, ok);
+            SetChip(ChipDriver, ChipDriverText, ok ? "监控驱动：可用" : "监控驱动：检查失败", ok);
+            SetChip(ChipEc, ChipEcText, ok ? "EC：可读取" : "EC：不可用", ok);
+            ChipDriver.ToolTip = msg;
+            ChipEc.ToolTip = EcIO.Status;
         });
     }
 
@@ -235,6 +250,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(() =>
         {
             if (_shuttingDown) return;
+            ControlCenter.OnSnapshot(s);
             SetRow("CpuTemp", s.CpuTemp, v => v.ToString("0") + " °C",
                 v => v >= 90 ? Bad : v >= 75 ? Warn : Fg, _monitor.CpuName);
             SetRow("CpuPower", s.PackagePower, v => v.ToString("0.0") + " W", null,
@@ -405,7 +421,12 @@ public partial class MainWindow : Window
         if (i < 0 || j < 0 || j >= order.Count) return;
         (order[i], order[j]) = (order[j], order[i]);
         _settings.DashboardOrder = order;
-        _settings.Save();
+        if (_settings.TrySave(out string error)) Feedback(FeedbackKind.Success, "仪表盘顺序已保存", "下次打开时沿用当前行顺序。");
+        else
+        {
+            (order[i], order[j]) = (order[j], order[i]);
+            Feedback(FeedbackKind.Error, "行顺序保存失败", error + "；已恢复原顺序。");
+        }
         BuildDashboard();
     }
 
@@ -451,21 +472,26 @@ public partial class MainWindow : Window
     private async void BtnProfilePerformance_Click(object sender, RoutedEventArgs e) =>
         await SetThermalProfileAsync(ThermalProfile.ExtremePerformance);
 
-    private async void BtnProfileRefresh_Click(object sender, RoutedEventArgs e) => await RefreshThermalProfileAsync();
+    private async void BtnProfileRefresh_Click(object sender, RoutedEventArgs e) => await RefreshThermalProfileAsync(true);
 
-    private Task RefreshThermalProfileAsync() => RunThermalProfileRequestAsync(_thermalProfiles.Refresh);
+    private Task RefreshThermalProfileAsync(bool userInitiated = false) => RunThermalProfileRequestAsync(_thermalProfiles.Refresh, userInitiated);
 
-    private Task SetThermalProfileAsync(ThermalProfile profile) =>
-        RunThermalProfileRequestAsync(() => _thermalProfiles.SetProfile(profile));
+    private Task SetThermalProfileAsync(ThermalProfile profile)
+    {
+        ControlCenter.NotifyManualProfileChange();
+        return RunThermalProfileRequestAsync(() => _thermalProfiles.SetProfile(profile), true, profile);
+    }
 
-    private async Task RunThermalProfileRequestAsync(Func<bool> request)
+    private async Task RunThermalProfileRequestAsync(Func<bool> request, bool userInitiated = false, ThermalProfile? requested = null)
     {
         if (_shuttingDown || _profileRequestInProgress) return;
         _profileRequestInProgress = true;
+        BtnProfileRefresh.IsEnabled = false;
         BtnProfileSaving.IsEnabled = BtnProfileIntelligent.IsEnabled = BtnProfilePerformance.IsEnabled = false;
+        if (userInitiated) Feedback(FeedbackKind.Pending, requested.HasValue ? "正在切换为" + ProfileLabels.Name(requested.Value) + "…" : "正在读取散热模式…", "请稍候。");
         try
         {
-            await Task.Run(request);
+            bool ok = await Task.Run(request);
             if (_shuttingDown) return;
             var profile = _thermalProfiles.CurrentProfile;
             string label = profile switch
@@ -475,8 +501,10 @@ public partial class MainWindow : Window
                 ThermalProfile.ExtremePerformance => "性能",
                 _ => "未知",
             };
-            LblProfileCurrent.Text = "当前模式：" + label;
+            LblProfileCurrent.Text = "当前生效：" + label;
             LblProfileState.Text = _thermalProfiles.LastMessage;
+            LblProfileState.Foreground = ok ? FgDim : Bad;
+            LblProfileCheckedAt.Text = ok ? "更新于 " + DateTime.Now.ToString("HH:mm:ss") : "读取未完成";
             foreach (var (button, value) in new[]
             {
                 (BtnProfileSaving, ThermalProfile.BatterySaving),
@@ -488,7 +516,11 @@ public partial class MainWindow : Window
                 bool selected = profile == value;
                 button.Background = selected ? new SolidColorBrush(Color.FromRgb(46, 74, 90)) : (Brush)FindResource("ChipBrush");
                 button.BorderBrush = (Brush)FindResource(selected ? "AccentBrush" : "CardBorderBrush");
+                button.BorderThickness = new Thickness(selected ? 2 : 1);
+                button.Content = ProfileLabels.Name(value) + (selected ? "  ✓ 当前" : "");
             }
+            if (userInitiated) Feedback(ok ? FeedbackKind.Success : FeedbackKind.Error,
+                ok ? requested.HasValue ? "散热模式已切换为" + label : "当前散热模式已读取" : "散热模式未确认", _thermalProfiles.LastMessage);
         }
         catch (Exception ex)
         {
@@ -496,30 +528,41 @@ public partial class MainWindow : Window
             {
                 LblProfileCurrent.Text = "当前模式：读取失败";
                 LblProfileState.Text = ex.Message;
+                if (userInitiated) Feedback(FeedbackKind.Error, "散热模式操作失败", ex.Message);
                 App.Log("散热模式操作失败: " + ex);
             }
         }
-        finally { _profileRequestInProgress = false; }
+        finally { _profileRequestInProgress = false; BtnProfileRefresh.IsEnabled = true; }
     }
 
     private void BtnDustStart_Click(object sender, RoutedEventArgs e)
     {
-        EnergyDrvFan.StartDustCleaning();
+        bool accepted = EnergyDrvFan.StartDustCleaning();
+        if (accepted)
+        {
+            _dustStartedAt = System.Diagnostics.Stopwatch.GetTimestamp(); _dustCompletionNotice = true; _dustUiTimer.Start();
+        }
+        Feedback(accepted ? FeedbackKind.Pending : FeedbackKind.Error, accepted ? "除尘指令已发送" : "除尘未开始", EnergyDrvFan.LastMessage);
         LblFanState.Text = EnergyDrvFan.LastMessage;
         UpdateFanControls();
     }
 
     private void BtnDustStop_Click(object sender, RoutedEventArgs e)
     {
-        EnergyDrvFan.Stop("已停止除尘");
+        _dustCompletionNotice = false;
+        EnergyDrvFan.Stop("已停止除尘"); _dustLastFinished = DateTimeOffset.Now;
+        Feedback(EnergyDrvFan.RestorePending ? FeedbackKind.Error : FeedbackKind.Success,
+            EnergyDrvFan.RestorePending ? "停止除尘失败" : "本次除尘已取消", EnergyDrvFan.LastMessage);
         LblFanState.Text = EnergyDrvFan.LastMessage;
         UpdateFanControls();
     }
 
     private void OnFanState(bool running, string msg)
     {
+        if (_shuttingDown) return;
         Dispatcher.BeginInvoke(() =>
         {
+            if (_shuttingDown) return;
             // A newer selection may already have replaced this queued event.
             LblFanState.Text = EnergyDrvFan.LastMessage;
             UpdateFanControls();
@@ -530,19 +573,33 @@ public partial class MainWindow : Window
     {
         var mode = EnergyDrvFan.CurrentMode;
         bool restoring = EnergyDrvFan.RestorePending;
+        double elapsed = _dustStartedAt.HasValue ? System.Diagnostics.Stopwatch.GetElapsedTime(_dustStartedAt.Value).TotalSeconds : 0;
+        DustProgress.Visibility = mode == FanControlMode.DustCleaning ? Visibility.Visible : Visibility.Collapsed;
+        DustProgress.Value = Math.Clamp(elapsed, 0, 11);
         LblFanState.Foreground = restoring ? Bad : Fg;
         BtnDustStart.IsEnabled = _energyAvailable && mode != FanControlMode.DustCleaning;
         BtnDustStop.IsEnabled = _energyAvailable && (mode == FanControlMode.DustCleaning || restoring);
         LblDustState.Text = mode == FanControlMode.DustCleaning
-            ? "除尘：正在执行本次请求，约 11 秒后结束"
-            : restoring ? "除尘：停止请求失败，请点击取消本次除尘重试" : "除尘：未运行";
+            ? $"除尘中 · 剩余约 {Math.Max(0, Math.Ceiling(11 - elapsed)):0} 秒"
+            : restoring ? "停止请求未确认 · 请点击取消本次除尘重试" : "除尘：未运行" + (_dustLastFinished.HasValue ? $" · 上次结束 {_dustLastFinished:HH:mm:ss}" : "");
+        if (mode == FanControlMode.Normal)
+        {
+            _dustUiTimer.Stop(); _dustStartedAt = null;
+            if (_dustCompletionNotice)
+            {
+                _dustCompletionNotice = false; _dustLastFinished = DateTimeOffset.Now;
+                Feedback(restoring ? FeedbackKind.Error : FeedbackKind.Success,
+                    restoring ? "除尘结束，恢复调速失败" : "本次除尘已结束", EnergyDrvFan.LastMessage);
+            }
+        }
         UpdateFanModeChip();
     }
 
     private void ToggleOverlay()
     {
-        SetOverlayVisible(_overlay == null || !_overlay.IsVisible);
-        ChkOverlay.IsChecked = _overlay != null && _overlay.IsVisible;
+        bool show = _overlay == null || !_overlay.IsVisible;
+        if (ChkOverlay.IsChecked != show) ChkOverlay.IsChecked = show;
+        else SetOverlayVisible(show);
     }
 
     private void SetOverlayVisible(bool show)
@@ -565,24 +622,33 @@ public partial class MainWindow : Window
 
     private void CbCloseAction_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        if (_initializing || _updatingUiSettings) return;
+        bool before = _settings.CloseToTray;
         if (CbCloseAction.SelectedIndex == 0) _settings.CloseToTray = true;
         else if (CbCloseAction.SelectedIndex == 1) _settings.CloseToTray = false;
         else return;
-        _settings.Save();
+        SaveWindowPreferences(() => _settings.CloseToTray = before,
+            () => CbCloseAction.SelectedIndex = before ? 0 : 1, "关闭按钮行为已保存",
+            _settings.CloseToTray ? "点击关闭按钮将隐藏到托盘，程序继续运行。" : "点击关闭按钮将退出程序。");
     }
 
     private void ChkOverlay_Changed(object sender, RoutedEventArgs e)
     {
+        if (_initializing || _updatingUiSettings) return;
+        bool before = _settings.OverlayEnabled;
         _settings.OverlayEnabled = ChkOverlay.IsChecked == true;
-        _settings.Save();
+        if (!SaveWindowPreferences(() => _settings.OverlayEnabled = before, () => ChkOverlay.IsChecked = before,
+            _settings.OverlayEnabled ? "悬浮窗设置已开启" : "悬浮窗设置已关闭", _settings.OverlayEnabled ? "显示实时 CPU／GPU 数据，窗口可点击穿透。" : "悬浮窗已隐藏，下次打开沿用此设置。")) return;
         SetOverlayVisible(_settings.OverlayEnabled);
     }
 
     private void CbOverlayCorner_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (CbOverlayCorner.SelectedIndex < 0) return;
+        if (_initializing || _updatingUiSettings || CbOverlayCorner.SelectedIndex < 0) return;
+        int before = _settings.OverlayCorner;
         _settings.OverlayCorner = CbOverlayCorner.SelectedIndex;
-        _settings.Save();
+        if (!SaveWindowPreferences(() => _settings.OverlayCorner = before, () => CbOverlayCorner.SelectedIndex = before,
+            "悬浮窗位置已保存", new[] { "左上角", "右上角", "左下角", "右下角" }[_settings.OverlayCorner])) return;
         if (_overlay != null)
         {
             _overlay.Corner = _settings.OverlayCorner;
@@ -592,47 +658,58 @@ public partial class MainWindow : Window
 
     // ---------------- EC 工具 ----------------
 
-    private void BtnEcRefresh_Click(object sender, RoutedEventArgs e)
+    private async void BtnEcRefresh_Click(object sender, RoutedEventArgs e)
     {
+        if (_ecRequestInProgress || _shuttingDown) return;
+        _ecRequestInProgress = true; EcActions.IsEnabled = false;
         LblEcView.Text = "读取中…";
-        Task.Run(() =>
+        Feedback(FeedbackKind.Pending, "正在读取 EC 数据…", "完成后会显示读取时间，可继续设置快照。");
+        try
         {
-            var dump = EcIO.Dump(256);
-            Dispatcher.BeginInvoke(() =>
+            var dump = await Task.Run(() => EcIO.Dump(256));
+            if (_shuttingDown) return;
+            if (dump == null)
             {
-                if (dump == null)
-                {
-                    LblEcView.Text = "读取失败：" + EcIO.Status;
-                    return;
-                }
-                _currentDump = dump;
-                for (int i = 0; i < 256; i++) _ecCells[i].SetCurrent(dump[i]);
-                LblEcView.Text = $"已读取 {DateTime.Now:HH:mm:ss}（悬停查看地址）";
-            });
-        });
+                LblEcView.Text = "读取失败，保留上次数据";
+                Feedback(FeedbackKind.Error, "EC 读取失败", EcIO.Status); return;
+            }
+            _currentDump = dump;
+            for (int i = 0; i < 256; i++) _ecCells[i].SetCurrent(dump[i]);
+            LblEcView.Text = $"已读取 {DateTime.Now:HH:mm:ss}（悬停查看地址）";
+            Feedback(FeedbackKind.Success, "EC 数据已读取", "256 字节已更新，可设置快照 A 或 B。");
+        }
+        catch (Exception ex) { LblEcView.Text = "读取失败"; Feedback(FeedbackKind.Error, "EC 读取失败", ex.Message); }
+        finally { _ecRequestInProgress = false; EcActions.IsEnabled = true; }
     }
 
     private void BtnEcSnapA_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentDump == null) { LblEcView.Text = "请先「读取 EC」"; return; }
+        if (_currentDump == null) { Feedback(FeedbackKind.Info, "快照 A 尚未设置", "请先点击“读取 EC”。"); return; }
         for (int i = 0; i < 256; i++) _ecCells[i].SetA(_currentDump[i]);
         LblEcView.Text = "已记录快照 A";
+        _snapshotATime = DateTimeOffset.Now; UpdateSnapshotState();
+        Feedback(FeedbackKind.Success, "快照 A 已设置", "记录当前显示的 256 字节，可读取新数据后设置快照 B。");
     }
 
     private void BtnEcSnapB_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentDump == null) { LblEcView.Text = "请先「读取 EC」"; return; }
+        if (_currentDump == null) { Feedback(FeedbackKind.Info, "快照 B 尚未设置", "请先点击“读取 EC”。"); return; }
         for (int i = 0; i < 256; i++) _ecCells[i].SetB(_currentDump[i]);
         LblEcView.Text = "已记录快照 B";
+        _snapshotBTime = DateTimeOffset.Now; UpdateSnapshotState();
+        Feedback(FeedbackKind.Success, "快照 B 已设置", "现在可以对比 A/B 差异。");
     }
 
     private void BtnEcDiff_Click(object sender, RoutedEventArgs e)
     {
+        if (!_ecCells.All(c => c.HasA && c.HasB))
+        { Feedback(FeedbackKind.Info, "还不能对比快照", "请分别设置快照 A 和 B 后再对比。"); return; }
         int n = 0;
         foreach (var c in _ecCells) { c.RefreshDiff(); if (c.Diff) n++; }
         LblEcView.Text = n == 0
-            ? "A/B 无差异（或未设置快照）"
+            ? "A/B 无差异"
             : $"A/B 差异 {n} 字节（橙色高亮）";
+        Feedback(FeedbackKind.Success, "快照对比已完成", n == 0 ? "A/B 的 256 字节完全一致。" : $"发现 {n} 个不同字节，已在表格中用橙色高亮。");
     }
 
     // ---------------- 辅助类型 ----------------

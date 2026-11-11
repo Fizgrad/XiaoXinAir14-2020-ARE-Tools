@@ -88,7 +88,7 @@ internal sealed class EnergyDrvController
                 _mode = FanControlMode.Normal;
                 if (!Restore())
                 {
-                    notice = Message("恢复正常调速失败，未开始除尘；请点击「停止除尘」重试");
+                    notice = Message("恢复正常调速失败，未开始除尘；请点击「取消本次除尘」重试");
                     success = false;
                 }
                 else
@@ -107,7 +107,7 @@ internal sealed class EnergyDrvController
                             var period = TimeSpan.FromMilliseconds(100);
                             _timer = _time.CreateTimer(_ => Tick(generation), null, period, period);
                         }
-                        notice = Message("一次除尘请求已发送，约 11 秒后结束；执行期间不会重复触发");
+                        notice = Message("除尘指令已发送，约 11 秒后结束");
                         success = true;
                     }
                     catch (Exception ex) { notice = StopLocked(ex.Message); success = false; }
@@ -137,7 +137,7 @@ internal sealed class EnergyDrvController
             {
                 long now = _time.GetTimestamp();
                 if (_time.GetElapsedTime(_startedAt, now) >= EnergyDrvFan.DustCycleDuration)
-                    notice = StopLocked("本次除尘请求已结束");
+                    notice = StopLocked("本次除尘已结束");
             }
             catch (Exception ex) { notice = StopLocked("风扇控制异常：" + ex.Message); }
         }
@@ -147,7 +147,7 @@ internal sealed class EnergyDrvController
     {
         CancelTimer();
         _mode = FanControlMode.Normal;
-        return Message(Restore() ? reason + "；已发送正常调速请求" : reason + "；恢复请求失败，请点击「停止除尘」重试");
+        return Message(Restore() ? reason + "；正常调速指令已发送" : reason + "；恢复请求失败，请点击「取消本次除尘」重试");
     }
     private void CancelTimer()
     {

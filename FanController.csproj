@@ -10,7 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>FanController</RootNamespace>
     <AssemblyName>FanController</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.2.3</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -28,6 +28,7 @@
   <ItemGroup>
     <!-- 窗口 Icon 用 pack URI 从编译资源加载；EXE 图标由 ApplicationIcon 提供 -->
     <Resource Include="app.ico" />
+    <None Update="tools\ryzenadj\*.exe;tools\ryzenadj\*.dll;tools\ryzenadj\*.sys;tools\RyzenAdj-LICENSE.txt;tools\RyzenAdj-GPL-3.0.txt;tools\ThirdPartyNotices.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- FanDiag 是独立子项目（含自己的入口），必须从本项目默认源码收集中排除 -->

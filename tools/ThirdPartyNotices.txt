@@ -1,0 +1,15 @@
+RyzenAdj v0.19.0 (optional external command-line application)
+Copyright (C) Jiaxun Yang and RyzenAdj contributors.
+License: GNU Lesser General Public License version 3 (see RyzenAdj-LICENSE.txt).
+Unmodified official Windows binaries are prepared by Prepare-RyzenAdj.ps1.
+Release: https://github.com/FlyGoat/RyzenAdj/releases/tag/v0.19.0
+Corresponding source: https://github.com/FlyGoat/RyzenAdj/tree/v0.19.0
+Source archive: https://github.com/FlyGoat/RyzenAdj/archive/refs/tags/v0.19.0.zip
+Windows archive SHA256: 871734a2322ea61a0d83ea8373162d3e1ecf0411ba4eb7e6aec423f4b6b95b4f
+The upstream Windows archive includes InpOut and WinRing0 dependencies.
+This application does not run the upstream service installation scripts.
+
+Lenovo GBMD/SBMC and HALS/SALS protocol references:
+https://github.com/dantmnf/OpenLenovoSettings
+https://github.com/torvalds/linux/blob/master/drivers/platform/x86/lenovo/ideapad-laptop.c
+The command sequences were checked against the local DTCN27WW DSDT and AcpiVpc driver.

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Services\ThermalProfileService.cs" Link="ThermalProfileService.cs" />
+    <Compile Include="..\..\Services\LenovoDeviceService.cs" Link="LenovoDeviceService.cs" />
+    <Compile Include="..\..\Services\BatteryReader.cs" Link="BatteryReader.cs" />
+    <Compile Include="..\..\Services\BatteryHistoryService.cs" Link="BatteryHistoryService.cs" />
+    <Compile Include="..\..\Services\AutomationEngine.cs" Link="AutomationEngine.cs" />
+    <Compile Include="..\..\Services\BacklightIdleController.cs" Link="BacklightIdleController.cs" />
+    <Compile Include="..\..\Services\PowerTuningService.cs" Link="PowerTuningService.cs" />
+    <Compile Include="..\..\Models\AutomationSettings.cs" Link="AutomationSettings.cs" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+</Project>
