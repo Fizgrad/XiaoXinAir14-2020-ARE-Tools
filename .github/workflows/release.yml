@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing version tag to publish'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,15 +30,42 @@ jobs:
         shell: pwsh
         run: .\tools\Prepare-RyzenAdj.ps1
 
+      - name: Software checks
+        shell: pwsh
+        run: |
+          foreach ($project in @('ControlChecks', 'ProfileChecks', 'FeatureChecks', 'StartupChecks', 'FeatureUiChecks', 'SystemChecks')) {
+            dotnet run --project "FanDiag/$project/$project.csproj" -c Release
+            if ($LASTEXITCODE -ne 0) { throw "Checks failed: $project" }
+          }
+
       - name: Publish (win-x64, framework-dependent)
         run: dotnet publish FanController.csproj -c Release -r win-x64 --self-contained false -o publish_out
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path publish_out\* -DestinationPath "FanController-${{ github.ref_name }}-win-x64.zip"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: Compress-Archive -Path publish_out\* -DestinationPath "FanController-$env:RELEASE_TAG-win-x64.zip"
+
+      - name: Publish self-contained installer payload
+        run: dotnet publish FanController.csproj -c Release -r win-x64 --self-contained true -o publish_setup
+
+      - name: Build installer
+        shell: pwsh
+        run: .\tools\Build-Installer.ps1 -PublishDirectory publish_setup -OutputDirectory installer_out
+
+      - name: Verify installation and uninstall
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem installer_out -Filter '*-Setup.exe' | Select-Object -First 1
+          .\FanDiag\Test-Installer.ps1 -InstallerPath $installer.FullName
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: FanController-*.zip
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            FanController-*.zip
+            installer_out/*-Setup.exe
           generate_release_notes: true

@@ -141,17 +141,32 @@
                 </ScrollViewer>
             </TabItem>
 
-            <!-- ============ 说明 ============ -->
-            <TabItem Header="说明">
+            <TabItem Header="硬件检测"><views:HardwareInventoryView x:Name="HardwareInfo"/></TabItem>
+
+            <!-- ============ 设置 ============ -->
+            <TabItem Header="设置">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10">
                         <Border Style="{StaticResource CardPanel}" Padding="16">
                             <StackPanel>
+                                <TextBlock Text="启动与关闭" FontSize="16" FontWeight="Bold" Margin="0,0,0,16"/>
+                                <StackPanel x:Name="StartupControls" IsEnabled="False">
+                                    <CheckBox x:Name="ChkStartWithWindows" Content="登录 Windows 时启动" FontSize="14" Checked="StartupOptions_Changed" Unchecked="StartupOptions_Changed"/>
+                                    <WrapPanel Margin="0,14,0,0">
+                                        <TextBlock Text="自启动时应用功耗预设" VerticalAlignment="Center" Margin="0,0,12,8"/>
+                                        <ComboBox x:Name="CbStartupPowerPreset" Width="160" Margin="0,0,12,8" SelectionChanged="StartupOptions_Changed">
+                                            <ComboBoxItem Content="保持当前"/><ComboBoxItem Content="安静办公"/><ComboBoxItem Content="均衡"/><ComboBoxItem Content="持续负载"/>
+                                        </ComboBox>
+                                        <Button Content="保存启动设置" Click="SaveStartup_Click" Margin="0,0,0,8"/>
+                                    </WrapPanel>
+                                    <TextBlock x:Name="LblStartupDraft" Text="设置已保存" FontSize="12" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <TextBlock x:Name="LblStartupState" Text="正在读取启动项…" Foreground="{StaticResource FgDimBrush}" TextWrapping="Wrap" Margin="0,8,0,20"/>
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="关闭按钮行为" VerticalAlignment="Center" FontSize="14"/>
-                                    <ComboBox x:Name="CbCloseAction" Width="160" Margin="12,0,0,0"
+                                    <ComboBox x:Name="CbCloseAction" Width="190" MinHeight="32" Margin="12,0,0,0"
                                               VerticalContentAlignment="Center" SelectionChanged="CbCloseAction_SelectionChanged">
-                                        <ComboBoxItem Content="隐藏到托盘继续运行"/>
+                                        <ComboBoxItem Content="最小化到托盘"/>
                                         <ComboBoxItem Content="直接退出程序"/>
                                     </ComboBox>
                                 </StackPanel>
@@ -160,7 +175,7 @@
                                               VerticalAlignment="Center" FontSize="14"
                                               Checked="ChkOverlay_Changed" Unchecked="ChkOverlay_Changed"/>
                                     <TextBlock Text="位置" VerticalAlignment="Center" FontSize="14" Margin="24,0,0,0"/>
-                                    <ComboBox x:Name="CbOverlayCorner" Width="100" Margin="12,0,0,0"
+                                    <ComboBox x:Name="CbOverlayCorner" Width="100" MinHeight="32" Margin="12,0,0,0"
                                               VerticalContentAlignment="Center" SelectionChanged="CbOverlayCorner_SelectionChanged">
                                         <ComboBoxItem Content="左上"/>
                                         <ComboBoxItem Content="右上"/>

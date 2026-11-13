@@ -107,7 +107,7 @@ internal sealed class HardwareSuite
             var tabs = Control<TabControl>(_window!, "MainTabs");
             if (name.StartsWith("Fn+Q") || name.StartsWith("除尘")) tabs.SelectedIndex = 1;
             else if (name.StartsWith("EC")) tabs.SelectedIndex = 3;
-            else if (name.StartsWith("悬浮窗")) tabs.SelectedIndex = 4;
+            else if (name.StartsWith("悬浮窗")) tabs.SelectedIndex = 5;
             else if (name.StartsWith("电池") || name.StartsWith("设备") || name.StartsWith("背光") || name.StartsWith("自动") || name.StartsWith("功耗"))
             {
                 tabs.SelectedIndex = 2;
@@ -288,6 +288,12 @@ internal sealed class HardwareSuite
         await ClickCenterByContent("读取当前参数");
         var power = Field<PowerTuningService>(_center, "_power"); Must(power.Current != null, power.Message);
         var before = power.Current;
+        await CenterReady();
+        await _center.ApplyStartupPresetAsync(PowerPreset.Quiet);
+        Must(_center.LastFeedback?.Kind == FeedbackKind.Success && power.Target != null, "自启动功耗流程未显示成功");
+        Must(_power.Refresh() && Matches(_power.Current!, power.Target!), "自启动功耗预设独立回读不匹配");
+        _report["StartupPowerVerified"] = new { Preset = "Quiet", Actual = _power.Current };
+        await ClickCenter("RestorePower"); Must(power.Current != null && Matches(before!, power.Current), "自启动预设恢复失败");
         var buttons = Descendants<Button>(_center).Where(b => b.Tag?.ToString() is "Quiet" or "Balanced" or "Sustained").ToArray();
         Must(buttons.Length == 3, "预设按钮缺失");
         foreach (var button in buttons)

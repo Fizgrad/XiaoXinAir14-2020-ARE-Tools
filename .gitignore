@@ -2,6 +2,8 @@ bin/
 obj/
 publish/
 publish_out/
+publish_setup/
+installer_out/
 FanDiag/bin/
 FanDiag/obj/
 FanDiag/diag.txt

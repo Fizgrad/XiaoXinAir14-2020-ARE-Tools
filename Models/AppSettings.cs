@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using FanController.Services;
 
 namespace FanController.Models;
 
@@ -15,6 +16,8 @@ public class AppSettings
 
     /// <summary>点窗口关闭按钮时：true = 隐藏到托盘继续运行，false = 直接退出</summary>
     public bool CloseToTray { get; set; } = true;
+    public bool StartWithWindows { get; set; }
+    public PowerPreset? StartupPowerPreset { get; set; }
 
     /// <summary>启用游戏内悬浮窗（热键 Ctrl+Alt+O 开关）</summary>
     public bool OverlayEnabled { get; set; } = true;
@@ -60,6 +63,7 @@ public class AppSettings
                     s.DashboardOrder ??= new();
                     s.RyzenAdjPath ??= "";
                     s.BacklightIdleSeconds = Math.Clamp(s.BacklightIdleSeconds, 0, 3600);
+                    if (s.StartupPowerPreset.HasValue && !Enum.IsDefined(s.StartupPowerPreset.Value)) s.StartupPowerPreset = null;
                     return s;
                 }
             }

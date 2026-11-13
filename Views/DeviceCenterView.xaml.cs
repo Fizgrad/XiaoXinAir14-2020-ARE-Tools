@@ -91,6 +91,19 @@ public partial class DeviceCenterView : UserControl
         RenderAutomation();
     }
 
+    public async Task ApplyStartupPresetAsync(PowerPreset preset)
+    {
+        NotifyManualProfileChange();
+        await RunOperationAsync(() =>
+        {
+            bool ok = _power?.Apply(preset) == true;
+            if (ok) { _selectedPreset = preset; _monitorPower = true; }
+            _powerReadAt = _lastPowerRead = DateTimeOffset.Now;
+            return new(ok, "自启动功耗已应用：" + PresetName(preset), "自启动功耗设置失败",
+                ok ? _power!.Current!.ToString() : _power?.Message ?? "尚未初始化");
+        }, "正在应用自启动功耗预设…");
+    }
+
     public void OnSnapshot(SensorSnapshot snapshot)
     {
         if (_stopping || _settings == null || snapshot.Battery == null || _history == null) return;

@@ -17,6 +17,7 @@ public partial class App : Application
     private EventWaitHandle? _showEvent;
     private Thread? _showWaiter;
     private volatile bool _exiting;
+    public bool IsStartupLaunch { get; private set; }
 
     public App() : this("FanController") { }
 
@@ -30,6 +31,13 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         Log("=== 启动 === " + AppContext.BaseDirectory);
+        IsStartupLaunch = e.Args.Contains("--startup", StringComparer.OrdinalIgnoreCase);
+        if (e.Args.Contains("--remove-startup", StringComparer.OrdinalIgnoreCase))
+        {
+            try { new Services.StartupRegistrationService(Path.Combine(AppContext.BaseDirectory, "FanController.exe")).RemoveForInstallation(); Shutdown(); }
+            catch (Exception ex) { Log("移除启动项失败：" + ex); Shutdown(1); }
+            return;
+        }
 
         DispatcherUnhandledException += (s, ev) =>
         {

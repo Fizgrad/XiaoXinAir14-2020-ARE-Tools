@@ -95,7 +95,7 @@ internal static class Program
             window.Close();
         }
         CheckWindowFrames(repo, directory, app);
-        Console.WriteLine("8 feature-page layouts, 4 window layouts and 6 feedback checks passed; no hardware calls.");
+        Console.WriteLine("8 feature-page layouts, 8 window layouts and 6 feedback checks passed; no hardware calls.");
         app.Shutdown(); return 0;
     }
 
@@ -166,7 +166,7 @@ internal static class Program
     {
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
         foreach (var (width, height) in new[] { (1040, 720), (1180, 780) })
-        foreach (int tab in new[] { 1, 2 })
+        foreach (int tab in new[] { 1, 2, 4, 5 })
         {
             var source = XDocument.Load(Path.Combine(repo, "MainWindow.xaml"));
             source.Root!.Attribute(x + "Class")!.Remove(); source.Root.Attribute("Icon")!.Remove();
@@ -178,6 +178,22 @@ internal static class Program
             foreach (var attribute in source.Root.Attributes().Where(a => a.IsNamespaceDeclaration && namespaces.ContainsKey(a.Value)).ToArray())
                 attribute.Value = namespaces[attribute.Value];
             var window = (Window)XamlReader.Parse(source.ToString());
+            var inventory = (FanController.Views.HardwareInventoryView)window.FindName("HardwareInfo"); inventory.AutoScan = false;
+            if (tab == 4)
+            {
+                inventory.ShowReport(new FanController.Models.HardwareInventoryReport(DateTimeOffset.Now, "XiaoXin Air 14", "1.3.0",
+                    new[] { new FanController.Models.HardwareItem("处理器", "AMD Ryzen 5 4600U with Radeon Graphics", FanController.Models.HardwareStatus.Normal, "正常",
+                        new[] { new FanController.Models.HardwareField("核心 / 线程", "6 / 12"), new FanController.Models.HardwareField("最高标称频率", "4000 MHz") }) },
+                    new[] { new FanController.Models.HardwareHealthCheck("设备管理器", FanController.Models.HardwareStatus.Normal, "检查 181 个已连接设备 · 0 个设备报告错误") }, Array.Empty<FanController.Models.HardwareSourceIssue>()));
+            }
+            if (tab == 5)
+            {
+                ((StackPanel)window.FindName("StartupControls")).IsEnabled = true;
+                ((CheckBox)window.FindName("ChkStartWithWindows")).IsChecked = true;
+                ((ComboBox)window.FindName("CbStartupPowerPreset")).SelectedIndex = 2;
+                ((TextBlock)window.FindName("LblStartupState")).Text = "已开启 · 登录后显示主窗口";
+                ((ComboBox)window.FindName("CbCloseAction")).SelectedIndex = 0;
+            }
             window.Left = window.Top = -20000; window.ShowActivated = window.ShowInTaskbar = false;
             window.WindowStyle = WindowStyle.None; window.ResizeMode = ResizeMode.NoResize;
             window.Width = width; window.Height = height;
@@ -190,6 +206,14 @@ internal static class Program
             var p = banner.TranslatePoint(new Point(), root);
             if (p.X < 0 || banner.ActualWidth <= 0 || p.X + banner.ActualWidth > root.ActualWidth + 1)
                 throw new InvalidOperationException("Window feedback banner clipped");
+            if (tab == 4)
+            {
+                ((TextBox)inventory.FindName("SearchText")).Text = "missing device";
+                if (((ItemsControl)inventory.FindName("DeviceItems")).Items.Count != 0) throw new InvalidOperationException("Hardware search ignored filter");
+                ((TextBox)inventory.FindName("SearchText")).Clear();
+                if (((ItemsControl)inventory.FindName("DeviceItems")).Items.Count != 1) throw new InvalidOperationException("Hardware search did not restore devices");
+                window.UpdateLayout();
+            }
             var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32); bitmap.Render(root);
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using (var output = File.Create(Path.Combine(directory, $"window-{tab}-{width}.png"))) encoder.Save(output);

@@ -10,7 +10,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>FanController</RootNamespace>
     <AssemblyName>FanController</AssemblyName>
-    <Version>1.2.3</Version>
+    <Version>1.3.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -40,6 +40,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SystemChecks" />
     <!-- 0.9.x 需要 PawnIo 驱动但 NuGet 包不含驱动本体，传感器会全读 0；0.8.8 内嵌 WinRing0，开箱即用 -->
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.8.8" />
     <PackageReference Include="System.Management" Version="8.0.0" />

@@ -59,6 +59,7 @@ public partial class MainWindow : Window
         _settings = AppSettings.Load();
         DataContext = _settings;
         ControlCenter.FeedbackPublished += message => ActionFeedback.Show(message);
+        HardwareInfo.FeedbackPublished += message => ActionFeedback.Show(message);
         ControlCenter.Initialize(_settings, _thermalProfiles, () => _ = RefreshThermalProfileAsync());
 
         for (int i = 0; i < 256; i++) _ecCells.Add(new EcCell(i));
@@ -69,6 +70,7 @@ public partial class MainWindow : Window
         CbCloseAction.SelectedIndex = _settings.CloseToTray ? 0 : 1;
         ChkOverlay.IsChecked = _settings.OverlayEnabled;
         CbOverlayCorner.SelectedIndex = Math.Clamp(_settings.OverlayCorner, 0, 3);
+        InitializeStartupControls();
 
         _monitor = new MonitorService(_settings);
         _monitor.StatusChanged += OnMonitorStatus;
@@ -87,18 +89,20 @@ public partial class MainWindow : Window
         _dustUiTimer.Tick += (_, _) => UpdateFanControls();
 
         // 窗口先显示，驱动加载等重活放到 Loaded 之后，避免卡住启动
-        Loaded += (_, _) =>
+        Loaded += async (_, _) =>
         {
             App.Log("窗口已显示，开始加载监控");
             SetOverlayVisible(_settings.OverlayEnabled);
-            _profileTimer.Start();
-            ControlCenter.Start();
-            _ = RefreshThermalProfileAsync();
-            Task.Run(() =>
+            _ = Task.Run(() =>
             {
                 try { _monitor.Start(); }
                 catch (Exception ex) { App.Log("监控启动异常: " + ex); }
             });
+            await ApplyStartupActionsAsync();
+            if (_shuttingDown) return;
+            _profileTimer.Start();
+            ControlCenter.Start();
+            _ = RefreshThermalProfileAsync();
         };
 
         Closed += (_, _) => Shutdown();
@@ -199,6 +203,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
+        if (_startupSavePending) { e.Cancel = true; return; }
         // 关闭按钮行为可配置：隐藏到托盘继续运行，或直接退出
         if (!_reallyExit && _settings.CloseToTray)
         {
@@ -216,6 +221,7 @@ public partial class MainWindow : Window
         _profileTimer.Stop();
         _dustUiTimer.Stop();
         ControlCenter.Stop();
+        HardwareInfo.Stop();
         _reallyExit = true;
         try { _tray?.Dispose(); } catch { }
         _monitor.StatusChanged -= OnMonitorStatus;

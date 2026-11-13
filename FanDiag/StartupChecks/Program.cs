@@ -10,8 +10,9 @@ namespace StartupChecks
         [STAThread]
         private static int Main(string[] args)
         {
-            if (args is ["child", var prefix, var directory, var mode])
+            if (args.Length >= 4 && args[0] == "child")
             {
+                string prefix = args[1], directory = args[2], mode = args[3];
                 ChildState.Directory = directory;
                 ChildState.Mode = mode;
                 FanController.App.LogFileOverride = Path.Combine(directory, $"app-{Environment.ProcessId}.log");
@@ -75,7 +76,11 @@ namespace StartupChecks
                     && File.Exists(Path.Combine(checkDirectory, $"overlay-closed-{explicitExit.Id}.txt")),
                     "Explicit application exit did not close both main and overlay windows");
                 Console.WriteLine("PASS explicit application exit closes the main window and live overlay");
-                Console.WriteLine("5 startup checks passed; all windows stayed offscreen and no hardware driver was opened.");
+                var automatic = StartChild(instancePrefix, checkDirectory, "startup-flag"); children.Add(automatic);
+                Require(automatic.WaitForExit(10000) && automatic.ExitCode == 0, "Startup argument launch failed");
+                Require(File.ReadAllText(Path.Combine(checkDirectory, $"startup-launch-{automatic.Id}.txt")) == "Startup=True;Visible=True", "Startup flag or visible main window was lost");
+                Console.WriteLine("PASS logon startup argument is recognized and the main window is shown");
+                Console.WriteLine("6 startup checks passed; all windows stayed offscreen and no hardware driver was opened.");
                 return 0;
             }
             catch (Exception ex)
@@ -107,6 +112,7 @@ namespace StartupChecks
             if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
                 start.ArgumentList.Add(typeof(Program).Assembly.Location);
             foreach (string argument in new[] { "child", prefix, directory, mode }) start.ArgumentList.Add(argument);
+            if (mode == "startup-flag") start.ArgumentList.Add("--startup");
             return Process.Start(start) ?? throw new InvalidOperationException("Failed to start check process");
         }
 
@@ -154,6 +160,11 @@ namespace FanController
                 _overlay = new Window { Left = -30000, Top = -30000, Width = 50, Height = 50, ShowInTaskbar = false };
                 _overlay.Closed += (_, _) => StartupChecks.ChildState.Mark("overlay-closed");
                 _overlay.Show();
+                if (StartupChecks.ChildState.Mode == "startup-flag")
+                {
+                    StartupChecks.ChildState.Mark("startup-launch", $"Startup={((App)Application.Current).IsStartupLaunch};Visible={IsVisible}");
+                    Dispatcher.BeginInvoke(Close); return;
+                }
                 Hide();
                 StartupChecks.ChildState.Mark("ready", $"MainWindowAssigned={ReferenceEquals(Application.Current.MainWindow, this)};Hidden={!IsVisible}");
                 if (StartupChecks.ChildState.Mode == "restart")
@@ -197,6 +208,11 @@ namespace FanController
 
 namespace FanController.Services
 {
+    internal sealed class StartupRegistrationService
+    {
+        public StartupRegistrationService(string executable) { }
+        public void RemoveForInstallation() => throw new InvalidOperationException("Startup checks must not change logon tasks");
+    }
     internal static class EnergyDrvFan
     {
         public static bool IsRunning => false;
