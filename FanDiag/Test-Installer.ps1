@@ -12,16 +12,24 @@ New-Item -ItemType Directory -Path $testRoot | Out-Null
 $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$installationPath`"", "/GROUP=`"$groupName`"", '/TASKS=', "/LOG=`"$(Join-Path $testRoot 'install.log')`"") -WindowStyle Hidden -Wait -PassThru
 if ($setup.ExitCode -ne 0) { throw ('Installer failed with exit code ' + $setup.ExitCode) }
 $appPath = Join-Path $installationPath 'FanController.exe'
-$shortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) ($groupName + '\FanController.lnk')
+$shortcut = $null
 try {
     foreach ($required in @('FanController.exe', 'FanController.dll', 'coreclr.dll', 'PresentationFramework.dll', 'unins000.exe', 'tools\ryzenadj\ryzenadj.exe')) {
         if (!(Test-Path -LiteralPath (Join-Path $installationPath $required) -PathType Leaf)) { throw ('Installed file missing: ' + $required) }
     }
-    if (!(Test-Path -LiteralPath $shortcut)) { throw 'Start menu shortcut was not installed' }
+    $wsh = New-Object -ComObject WScript.Shell
+    foreach ($programsRoot in @([Environment]::GetFolderPath('CommonPrograms'), [Environment]::GetFolderPath('Programs'))) {
+        if (!$programsRoot -or !(Test-Path -LiteralPath $programsRoot)) { continue }
+        foreach ($candidate in @(Get-ChildItem -LiteralPath $programsRoot -Filter 'FanController.lnk' -Recurse -File)) {
+            if ($wsh.CreateShortcut($candidate.FullName).TargetPath -eq $appPath) { $shortcut = $candidate.FullName; break }
+        }
+        if ($shortcut) { break }
+    }
+    if (!$shortcut) { throw 'Start menu shortcut targeting the installed application was not found' }
+    Write-Output ('Verified start menu shortcut: ' + $shortcut)
     $version = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $installationPath 'FanController.dll')).FileVersion
     if ($version -ne '1.3.0.0') { throw ('Unexpected installed version: ' + $version) }
     if (!(Test-Path -LiteralPath $uninstallKey)) { throw 'Windows uninstall entry is missing' }
-    $wsh = New-Object -ComObject WScript.Shell
     $shortcutInfo = $wsh.CreateShortcut($shortcut)
     if ($shortcutInfo.TargetPath -ne $appPath) { throw 'Start menu shortcut targets the wrong executable' }
 
@@ -40,6 +48,13 @@ try {
     $remaining = @($folder.GetTasks(1) | Where-Object { $_.Name -eq $taskName })
     if ($remaining.Count -gt 0) { throw 'Uninstall left the application logon task' }
     Write-Output 'PASS installer: self-contained runtime, application files, shortcuts, uninstall entry and scheduled-task cleanup'
+}
+catch {
+    foreach ($logName in @('install.log','uninstall.log')) {
+        $logPath = Join-Path $testRoot $logName
+        if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Tail 70 | Write-Output }
+    }
+    throw
 }
 finally {
     if ($folder) { try { $folder.DeleteTask($taskName, 0) } catch { } }
