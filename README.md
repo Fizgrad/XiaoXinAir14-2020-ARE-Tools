@@ -1,4 +1,4 @@
-# FanController 1.3.0
+# FanController 1.3.1
 
 联想小新 Air 14 2020 锐龙版的 Windows 硬件管理工具。
 
@@ -20,7 +20,7 @@
 
 ## 安装与使用
 
-从 [GitHub Releases](https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools/releases/latest) 下载 `FanController-v1.3.0-win-x64-Setup.exe`，按向导安装。安装版包含 .NET 运行时、RyzenAdj 和配套组件，支持开始菜单、可选桌面快捷方式及 Windows 卸载。
+从 [GitHub Releases](https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools/releases/latest) 下载 `FanController-v1.3.1-win-x64-Setup.exe`，按向导安装。安装版包含 .NET 运行时、RyzenAdj 和配套组件，支持开始菜单、可选桌面快捷方式及 Windows 卸载。
 
 也可下载便携压缩包，完整解压后运行 `FanController.exe`；便携版需要 [.NET 8 Desktop Runtime（x64）](https://dotnet.microsoft.com/zh-cn/download/dotnet/8.0)。
 

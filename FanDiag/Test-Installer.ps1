@@ -1,6 +1,8 @@
 param([Parameter(Mandatory)][string]$InstallerPath)
 $ErrorActionPreference = 'Stop'
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$expectedVersion = (([xml](Get-Content -LiteralPath (Join-Path $repositoryRoot 'FanController.csproj') -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1) + '.0'
 $testId = [Guid]::NewGuid().ToString('N')
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('FanController-InstallerCheck-' + $testId)
 $installationPath = Join-Path $testRoot 'app'
@@ -28,7 +30,7 @@ try {
     if (!$shortcut) { throw 'Start menu shortcut targeting the installed application was not found' }
     Write-Output ('Verified start menu shortcut: ' + $shortcut)
     $version = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $installationPath 'FanController.dll')).FileVersion
-    if ($version -ne '1.3.0.0') { throw ('Unexpected installed version: ' + $version) }
+    if ($version -ne $expectedVersion) { throw ('Unexpected installed version: ' + $version) }
     if (!(Test-Path -LiteralPath $uninstallKey)) { throw 'Windows uninstall entry is missing' }
     $shortcutInfo = $wsh.CreateShortcut($shortcut)
     if ($shortcutInfo.TargetPath -ne $appPath) { throw 'Start menu shortcut targets the wrong executable' }

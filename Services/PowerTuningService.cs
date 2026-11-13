@@ -9,7 +9,7 @@ public sealed record PowerLimits(float FastW, float SlowW, float TemperatureC)
 {
     public override string ToString() => $"短时 {FastW:0.#} W · 持续 {SlowW:0.#} W · 温度上限 {TemperatureC:0.#} °C";
     internal bool Valid => float.IsFinite(FastW) && float.IsFinite(SlowW) && float.IsFinite(TemperatureC)
-        && SlowW > 0 && SlowW <= FastW && FastW <= 100 && TemperatureC is >= 40 and <= 110;
+        && FastW is > 0 and <= 100 && SlowW is > 0 and <= 100 && TemperatureC is >= 40 and <= 110;
     internal bool Matches(PowerLimits other) => Math.Abs(FastW - other.FastW) < 0.2f
         && Math.Abs(SlowW - other.SlowW) < 0.2f && Math.Abs(TemperatureC - other.TemperatureC) < 1;
 }
@@ -22,6 +22,7 @@ public sealed class PowerTuningService
 {
     private readonly IRyzenAdjRunner _runner;
     private readonly Lazy<(bool Supported, string Description)> _identity;
+    private readonly Action<string>? _diagnosticLog;
     public string ExecutablePath { get; private set; }
     public PowerLimits? Current { get; private set; }
     public PowerLimits? Original { get; private set; }
@@ -29,9 +30,9 @@ public sealed class PowerTuningService
     public string Message { get; private set; } = "点击读取参数后启用功耗预设";
     public bool Ready => Current != null;
     public PowerTuningService(string path, CancellationToken cancellation = default, Action<string>? diagnosticLog = null)
-        : this(path, new RyzenAdjRunner(cancellation, diagnosticLog), ThermalProfileService.ReadMachineIdentity) { }
-    internal PowerTuningService(string path, IRyzenAdjRunner runner, Func<(bool Supported, string Description)> identity)
-    { ExecutablePath = path; _runner = runner; _identity = new(identity); }
+        : this(path, new RyzenAdjRunner(cancellation, diagnosticLog), ThermalProfileService.ReadMachineIdentity, diagnosticLog) { }
+    internal PowerTuningService(string path, IRyzenAdjRunner runner, Func<(bool Supported, string Description)> identity, Action<string>? diagnosticLog = null)
+    { ExecutablePath = path; _runner = runner; _identity = new(identity); _diagnosticLog = diagnosticLog; }
 
     public void SetExecutable(string path)
     {
@@ -118,7 +119,10 @@ public sealed class PowerTuningService
         if (!_identity.Value.Supported) throw new InvalidOperationException("机型或 BIOS 未适配功耗预设：" + _identity.Value.Description);
         var result = _runner.Run(ExecutablePath, new[] { "--info" });
         if (result.ExitCode != 0) throw new InvalidOperationException("RyzenAdj 读取失败：" + DescribeFailure(result));
-        return Parse(result.Output) ?? throw new InvalidOperationException("RyzenAdj 未返回有效的 Renoir 功耗表，保留固件设置");
+        var limits = Parse(result.Output);
+        if (limits != null) return limits;
+        _diagnosticLog?.Invoke("RyzenAdj --info 解析失败，原始输出：\n" + (result.Output.Length <= 8192 ? result.Output : result.Output[..8192]));
+        throw new InvalidOperationException("RyzenAdj 返回的功耗参数格式或数值无效");
     }
     internal void WriteAndVerify(PowerLimits limits)
     {

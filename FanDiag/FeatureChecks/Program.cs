@@ -68,6 +68,8 @@ var checks = new (string Name, Action Run)[]
     ("sleep history respects opt-out and computes net loss", BatterySleep),
     ("power parser rejects other CPUs and incomplete tables", PowerParser),
     ("power presets clamp to OEM limits and restore original", PowerApply),
+    ("independent fast and slow limits can read, apply and restore", PowerIndependentLimits),
+    ("unrecognized table output is recorded for diagnosis", PowerParseLog),
     ("partial power failure rolls back before reporting failure", PowerRollback),
     ("power readback mismatch is rejected", PowerMismatch),
     ("every power setter initializes the Windows PM mapping", PowerInitialization),
@@ -258,8 +260,26 @@ static string Table(PowerLimits p, string family = "Renoir") => $"CPU Family: {f
 static void PowerParser()
 {
     var p = new PowerLimits(30, 25, 95); Require(PowerTuningService.Parse(Table(p)) == p, "Valid power table rejected");
+    var independent = new PowerLimits(25, 37.5f, 80);
+    Require(PowerTuningService.Parse(Table(independent)) == independent, "Actual firmware limits were rejected because slow limit exceeded fast limit");
     Require(PowerTuningService.Parse(Table(p, "Cezanne")) == null && PowerTuningService.Parse("CPU Family: Renoir") == null, "Invalid power table accepted");
     Require(PowerTuningService.Parse(Table(new(0, 0, 0))) == null, "Zero limits accepted");
+    Require(PowerTuningService.Parse(Table(new(25, 150, 80))) == null, "Out-of-range slow limit accepted");
+}
+static void PowerIndependentLimits()
+{
+    var (s, d) = PowerRig(); var original = d.Current = new(25, 37.5f, 80);
+    Require(s.Refresh() && s.Current == original && d.Arguments.Count == 1, "Read-only refresh rejected independent limits or issued writes");
+    Require(s.Apply(PowerPreset.Quiet) && s.Current == new PowerLimits(15, 12, 70), "Preset could not be applied from actual firmware limits");
+    Require(s.Restore() && s.Current == original && d.Current == original, "Independent original limits were not restored exactly");
+    d.FailNextWrite = true;
+    Require(!s.Apply(PowerPreset.Quiet) && d.Current == original && s.Current == original, "Partial failure could not roll back independent limits");
+}
+static void PowerParseLog()
+{
+    var d = new FakeRyzen { InfoOutput = "CPU Family: Renoir\nPM Table Version: 370005\nNo table returned" };
+    var logs = new List<string>(); var s = new PowerTuningService("C:\\test\\ryzenadj.exe", d, () => (true, "test"), logs.Add);
+    Require(!s.Refresh() && s.Current == null && logs.Count == 1 && logs[0].Contains(d.InfoOutput), "Failed parsing discarded raw tool output");
 }
 static (PowerTuningService S, FakeRyzen D) PowerRig()
 { var d = new FakeRyzen(); return (new("C:\\test\\ryzenadj.exe", d, () => (true, "test")), d); }
@@ -327,13 +347,14 @@ sealed class FakeEnergy : IEnergyTransport
 }
 sealed class FakeRyzen : IRyzenAdjRunner
 {
+    public string? InfoOutput;
     public PowerLimits Current = new(22, 20, 95);
     public bool FailNextWrite, Freeze, CrashAfterWrite;
     public List<string[]> Arguments { get; } = new();
     public CommandResult Run(string path, IReadOnlyList<string> arguments)
     {
         Arguments.Add(arguments.ToArray());
-        if (arguments.SequenceEqual(new[] { "--info" })) return new(0, $"CPU Family: Renoir\n| PPT LIMIT FAST | {Current.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {Current.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |\n| THM LIMIT CORE | {Current.TemperatureC.ToString(CultureInfo.InvariantCulture)} | tctl-temp |");
+        if (arguments.SequenceEqual(new[] { "--info" })) return new(0, InfoOutput ?? $"CPU Family: Renoir\n| PPT LIMIT FAST | {Current.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {Current.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |\n| THM LIMIT CORE | {Current.TemperatureC.ToString(CultureInfo.InvariantCulture)} | tctl-temp |");
         float Value(string prefix) => float.Parse(arguments.Single(a => a.StartsWith(prefix)).Split('=')[1], CultureInfo.InvariantCulture);
         if (FailNextWrite) { Current = Current with { FastW = Value("--fast-limit") / 1000 }; FailNextWrite = false; return new(1, "partial failure"); }
         if (!Freeze) Current = new(Value("--fast-limit") / 1000, Value("--slow-limit") / 1000, Value("--tctl-temp"));
