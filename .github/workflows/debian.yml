@@ -16,6 +16,11 @@ on:
       - 'tools/build-deb.sh'
       - '.github/workflows/debian.yml'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing Linux version tag to publish (optional)'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,14 +35,18 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends git ca-certificates python3 python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-3.0 pkexec xz-utils desktop-file-utils weston dbus-daemon
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+      - name: Trust checked-out repository in the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Test Linux application
         run: PYTHONPATH=linux python3 -m unittest discover -s linux/tests -v
       - name: Validate desktop entry
         run: desktop-file-validate packaging/debian/fancontroller.desktop
       - name: Check release version
-        if: startsWith(github.ref, 'refs/tags/linux-v')
+        if: startsWith(github.ref, 'refs/tags/linux-v') || inputs.release_tag != ''
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           test "$RELEASE_TAG" = "linux-v1.4.0"
       - name: Build reproducible package
@@ -83,7 +92,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/linux-v')
+    if: startsWith(github.ref, 'refs/tags/linux-v') || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -95,6 +104,7 @@ jobs:
           path: dist
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
           name: XiaoXin Control Center 1.4.0 for Debian
           body: |
             小新控制中心 1.4.0：面向 Debian 13 的原生 GTK 3 硬件管理工具，支持 Wayland 和 X11。
