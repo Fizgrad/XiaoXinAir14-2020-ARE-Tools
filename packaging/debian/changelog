@@ -1,0 +1,11 @@
+fancontroller (1.4.0) unstable; urgency=medium
+
+  * Add a native GTK 3 application with Wayland and X11 support.
+  * Read hardware information through Linux sysfs and procfs.
+  * Apply supported hardware settings using a restricted Polkit helper.
+  * Add reproducible Debian package builds and Linux release automation.
+  * Name the Linux application XiaoXin Control Center (小新控制中心).
+  * Add compact CPU, memory, GPU and temperature history charts.
+  * Reuse a private privileged helper for each graphical application session.
+
+ -- Fizgrad <Fizgrad@users.noreply.github.com>  Mon, 16 Nov 2026 08:00:00 +0000

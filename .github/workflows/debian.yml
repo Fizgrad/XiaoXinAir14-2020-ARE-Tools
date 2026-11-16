@@ -1,0 +1,119 @@
+name: Debian package
+
+on:
+  push:
+    branches: [main]
+    tags: ['linux-v*']
+    paths:
+      - 'linux/**'
+      - 'packaging/debian/**'
+      - 'tools/build-deb.sh'
+      - '.github/workflows/debian.yml'
+  pull_request:
+    paths:
+      - 'linux/**'
+      - 'packaging/debian/**'
+      - 'tools/build-deb.sh'
+      - '.github/workflows/debian.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install build and runtime dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates python3 python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-3.0 pkexec xz-utils desktop-file-utils weston dbus-daemon
+      - uses: actions/checkout@v4
+      - name: Test Linux application
+        run: PYTHONPATH=linux python3 -m unittest discover -s linux/tests -v
+      - name: Validate desktop entry
+        run: desktop-file-validate packaging/debian/fancontroller.desktop
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/linux-v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$RELEASE_TAG" = "linux-v1.4.0"
+      - name: Build reproducible package
+        run: |
+          sh tools/build-deb.sh
+          cp dist/SHA256SUMS /tmp/expected-checksums
+          sh tools/build-deb.sh
+          cmp /tmp/expected-checksums dist/SHA256SUMS
+      - name: Verify installed command
+        run: |
+          dpkg -i dist/fancontroller_1.4.0_all.deb
+          fancontroller --help
+          fancontroller --json > /tmp/fancontroller-status.json
+          python3 -c 'import json; data=json.load(open("/tmp/fancontroller-status.json")); assert "identity" in data and "controls" in data'
+          test -z "$(dpkg --verify fancontroller)"
+          test "$(stat -c %a /usr/libexec/fancontroller-helper)" = 755
+          /usr/libexec/fancontroller-helper --session < /dev/null > /tmp/fancontroller-helper-ready.json
+          python3 -c 'import json; assert json.load(open("/tmp/fancontroller-helper-ready.json")) == {"type":"ready","protocol":1}'
+      - name: Verify native Wayland window
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          chmod 0700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless --renderer=pixman --socket=fancontroller-wayland --idle-time=0 --no-config --log=/tmp/fancontroller-weston.log &
+          compositor_pid=$!
+          trap 'kill "$compositor_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 50); do
+            test ! -S "$XDG_RUNTIME_DIR/fancontroller-wayland" || break
+            sleep 0.1
+          done
+          if ! test -S "$XDG_RUNTIME_DIR/fancontroller-wayland"; then
+            cat /tmp/fancontroller-weston.log
+            exit 1
+          fi
+          GDK_BACKEND=wayland WAYLAND_DISPLAY=fancontroller-wayland dbus-run-session -- timeout 20 fancontroller --smoke-test > /tmp/fancontroller-wayland.json
+          cat /tmp/fancontroller-wayland.json
+          python3 -c 'import json; data=json.load(open("/tmp/fancontroller-wayland.json")); assert data["smoke_test"] is True and "Wayland" in data["display"]'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fancontroller-debian
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/linux-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fancontroller-debian
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: XiaoXin Control Center 1.4.0 for Debian
+          body: |
+            小新控制中心 1.4.0：面向 Debian 13 的原生 GTK 3 硬件管理工具，支持 Wayland 和 X11。
+
+            - CPU、内存、GPU 和温度的最近 5 分钟曲线。
+            - 内核支持的散热模式、养护充电、Fn 锁、USB 供电与键盘背光控制。
+            - GUI 每次运行首次修改硬件时授权一次，关闭程序即结束授权会话。
+            - 硬件清单、健康信息、报告导出与可选电池历史记录。
+
+            下载 `fancontroller_1.4.0_all.deb` 和 `SHA256SUMS`，在下载目录执行：
+
+            ```sh
+            sha256sum -c SHA256SUMS
+            sudo apt install ./fancontroller_1.4.0_all.deb
+            fancontroller
+            ```
+
+            适配基线：联想小新 Air 14 2020 锐龙版（81YN）。设备控制按内核接口探测；除尘、Windows 功耗预设和直接 EC 访问尚未移植。
+          files: |
+            dist/*.deb
+            dist/SHA256SUMS
+          generate_release_notes: true

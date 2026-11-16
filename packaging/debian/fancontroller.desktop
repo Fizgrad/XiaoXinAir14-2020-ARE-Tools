@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=小新控制中心
+Name[zh_CN]=小新控制中心
+Comment=Monitor hardware and manage supported Lenovo laptop settings
+Comment[zh_CN]=监控硬件并管理联想笔记本设置
+Exec=fancontroller
+TryExec=fancontroller
+Icon=fancontroller
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=Lenovo;XiaoXin;fan;battery;thermal;
+StartupNotify=true
+StartupWMClass=fancontroller

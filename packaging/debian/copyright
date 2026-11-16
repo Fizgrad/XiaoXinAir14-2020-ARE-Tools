@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: XiaoXin Control Center
+Source: https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools
+
+Files: *
+Copyright: FanController contributors
+License: unspecified
+ No redistribution license has been declared by the upstream repository.
+ This package contains only the project's Linux application and packaging;
+ Windows binaries, drivers, and third-party RyzenAdj components are excluded.

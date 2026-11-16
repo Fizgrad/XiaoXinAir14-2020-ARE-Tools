@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>XiaoXin Control Center</vendor>
+  <vendor_url>https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools</vendor_url>
+  <action id="org.fancontroller.control">
+    <description>Change a supported Lenovo hardware setting</description>
+    <description xml:lang="zh_CN">更改联想电脑硬件设置</description>
+    <message>Administrator authentication is required to change this hardware setting.</message>
+    <message xml:lang="zh_CN">更改此硬件设置需要管理员身份验证。</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/fancontroller-helper</annotate>
+  </action>
+</policyconfig>

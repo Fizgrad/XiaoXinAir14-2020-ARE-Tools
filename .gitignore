@@ -13,3 +13,6 @@ FanDiag/exploration/
 *.user
 .vs/
 tools/ryzenadj/
+dist/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>小新控制中心</title>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3386f6"/>
+      <stop offset="1" stop-color="#194bd7"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#blue)"/>
+  <g fill="#fff">
+    <path d="M64 59C48 55 38 40 46 28C53 17 67 20 74 32C80 43 76 53 69 61Z"/>
+    <path d="M64 59C48 55 38 40 46 28C53 17 67 20 74 32C80 43 76 53 69 61Z" transform="rotate(90 64 64)"/>
+    <path d="M64 59C48 55 38 40 46 28C53 17 67 20 74 32C80 43 76 53 69 61Z" transform="rotate(180 64 64)"/>
+    <path d="M64 59C48 55 38 40 46 28C53 17 67 20 74 32C80 43 76 53 69 61Z" transform="rotate(270 64 64)"/>
+    <circle cx="64" cy="64" r="10" stroke="#2563e5" stroke-width="4"/>
+  </g>
+</svg>
