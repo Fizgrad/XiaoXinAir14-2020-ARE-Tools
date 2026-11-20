@@ -267,7 +267,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
                         <Grid Background="Transparent">
-                            <Track x:Name="PART_Track">
+                            <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}">
                                 <Track.Thumb>
                                     <Thumb/>
                                 </Track.Thumb>

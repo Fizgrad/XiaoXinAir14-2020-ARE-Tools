@@ -12,6 +12,11 @@
     <Compile Remove="ControlChecks\**" />
     <Compile Remove="StartupChecks\**" />
     <Compile Remove="ProfileChecks\**" />
+    <Compile Remove="FeatureChecks\**" />
+    <Compile Remove="FeatureUiChecks\**" />
+    <Compile Remove="HardwareChecks\**" />
+    <Compile Remove="SystemChecks\**" />
+    <Compile Remove="*\obj\**" />
     <Compile Remove="exploration\**" />
   </ItemGroup>
   <ItemGroup>

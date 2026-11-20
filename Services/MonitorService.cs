@@ -31,6 +31,7 @@ public class MonitorService : IDisposable
     private Computer? _computer;
     private Thread? _loop;
     private volatile bool _running;
+    private readonly ManualResetEventSlim _sleepGate = new(false);
 
     private IHardware? _cpu;
     private IHardware? _gpu;
@@ -82,6 +83,7 @@ public class MonitorService : IDisposable
         StatusChanged?.Invoke($"传感器就绪：CPU={_cpu != null} GPU={_gpu != null}；EC：{EcIO.Status}");
 
         _running = true;
+        _sleepGate.Reset();
         _loop = new Thread(Loop) { IsBackground = true, Name = "MonitorLoop" };
         _loop.Start();
     }
@@ -167,9 +169,19 @@ public class MonitorService : IDisposable
     {
         while (_running)
         {
-            var snap = Collect();
-            Updated?.Invoke(snap);
-            Thread.Sleep(Math.Max(250, _settings.PollIntervalMs));
+            try
+            {
+                var snap = Collect();
+                Updated?.Invoke(snap);
+            }
+            catch (Exception ex)
+            {
+                // 一次采集或订阅者异常不能让监控线程静默退出（线程退出后 _running 仍为 true，
+                // 界面将永远停止刷新）。记录状态并跳过本轮。
+                try { StatusChanged?.Invoke("监控刷新异常，已跳过本轮：" + ex.Message); } catch { }
+            }
+            // 用事件等待代替 Sleep，Dispose 时能立即唤醒退出。
+            _sleepGate.Wait(Math.Max(250, _settings.PollIntervalMs));
         }
     }
 
@@ -186,7 +198,16 @@ public class MonitorService : IDisposable
             }
         }
         catch { }
-        try { _gpu?.Update(); } catch { }
+        bool gpuUpdated = false;
+        try
+        {
+            if (_gpu != null)
+            {
+                _gpu.Update();
+                gpuUpdated = true;
+            }
+        }
+        catch { }
         // 个别 SMU 传感器出现较晚，缺失时再解析一次
         if (_pkgPower == null || _socPower == null || _cpuTemp == null) ResolveSensors();
 
@@ -206,16 +227,16 @@ public class MonitorService : IDisposable
         return new SensorSnapshot
         {
             Time = sampleTime,
-            // Do not present a cached temperature as a new reading after a failed update.
+            // Do not present cached readings as new after a failed update.
             CpuTemp = cpuUpdated ? _cpuTemp?.Value : null,
-            GpuTemp = _gpuTemp?.Value,
-            PackagePower = _pkgPower?.Value,
-            SocPower = _socPower?.Value,
-            CpuClockMHz = maxClock,
-            CpuLoad = cpuLoad,
-            GpuLoad = _gpuLoad?.Value,
-            GpuPowerW = _gpuPower?.Value,
-            GpuClockMHz = _gpuClock?.Value,
+            GpuTemp = gpuUpdated ? _gpuTemp?.Value : null,
+            PackagePower = cpuUpdated ? _pkgPower?.Value : null,
+            SocPower = cpuUpdated ? _socPower?.Value : null,
+            CpuClockMHz = cpuUpdated ? maxClock : null,
+            CpuLoad = cpuUpdated ? cpuLoad : null,
+            GpuLoad = gpuUpdated ? _gpuLoad?.Value : null,
+            GpuPowerW = gpuUpdated ? _gpuPower?.Value : null,
+            GpuClockMHz = gpuUpdated ? _gpuClock?.Value : null,
             BatteryPercent = battery.Percent,
             BatteryPowerW = battery.PowerW,
             Battery = battery,
@@ -225,6 +246,7 @@ public class MonitorService : IDisposable
     public void Dispose()
     {
         _running = false;
+        _sleepGate.Set(); // 立即唤醒等待中的采集线程，缩短关闭时间
         try { _loop?.Join(1500); } catch { }
         try { _computer?.Close(); } catch { }
         _computer = null;

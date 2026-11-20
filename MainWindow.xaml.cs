@@ -40,6 +40,7 @@ public partial class MainWindow : Window
 
     // ---- 托盘 ----
     private System.Windows.Forms.NotifyIcon? _tray;
+    private System.Drawing.Icon? _trayIcon; // 自绘图标，退出时释放
     private bool _reallyExit;
     private volatile bool _shuttingDown;
 
@@ -116,9 +117,10 @@ public partial class MainWindow : Window
     {
         try
         {
+            _trayIcon = CreateTrayIcon();
             _tray = new System.Windows.Forms.NotifyIcon
             {
-                Icon = CreateTrayIcon(),
+                Icon = _trayIcon ?? System.Drawing.SystemIcons.Application,
                 Text = "FanController — 双击打开",
                 Visible = true,
             };
@@ -144,8 +146,8 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>运行时绘制托盘图标（16/32px 双尺寸），不依赖 ICO 文件解析</summary>
-    private static System.Drawing.Icon CreateTrayIcon()
+    /// <summary>运行时绘制托盘图标（16/32px 双尺寸），不依赖 ICO 文件解析。失败返回 null。</summary>
+    private static System.Drawing.Icon? CreateTrayIcon()
     {
         try
         {
@@ -185,14 +187,26 @@ public partial class MainWindow : Window
                 g.FillEllipse(hub, 12.5f, 12.5f, 7, 7);
             }
             var hIcon = bmp.GetHicon();
-            var icon = System.Drawing.Icon.FromHandle(hIcon);
-            return icon;
+            try
+            {
+                // Icon.FromHandle 不拥有句柄；克隆出独立句柄后销毁原始 HICON 并释放位图
+                using var temp = System.Drawing.Icon.FromHandle(hIcon);
+                return (System.Drawing.Icon)temp.Clone();
+            }
+            finally
+            {
+                DestroyIcon(hIcon);
+                bmp.Dispose();
+            }
         }
         catch
         {
-            return System.Drawing.SystemIcons.Application;
+            return null; // 调用方回退到 SystemIcons.Application（共享实例，不能释放）
         }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool DestroyIcon(nint handle);
 
     public void ShowFromTray()
     {
@@ -224,6 +238,7 @@ public partial class MainWindow : Window
         HardwareInfo.Stop();
         _reallyExit = true;
         try { _tray?.Dispose(); } catch { }
+        try { _trayIcon?.Dispose(); _trayIcon = null; } catch { }
         _monitor.StatusChanged -= OnMonitorStatus;
         _monitor.Updated -= OnSnapshot;
         EnergyDrvFan.StateChanged -= OnFanState;

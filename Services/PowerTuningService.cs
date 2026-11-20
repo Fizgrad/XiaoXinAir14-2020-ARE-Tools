@@ -21,6 +21,7 @@ internal interface IRyzenAdjRunner { CommandResult Run(string path, IReadOnlyLis
 public sealed class PowerTuningService
 {
     private readonly IRyzenAdjRunner _runner;
+    private readonly IRyzenAdjRunner _rollbackRunner;
     private readonly Lazy<(bool Supported, string Description)> _identity;
     private readonly Action<string>? _diagnosticLog;
     public string ExecutablePath { get; private set; }
@@ -30,9 +31,14 @@ public sealed class PowerTuningService
     public string Message { get; private set; } = "点击读取参数后启用功耗预设";
     public bool Ready => Current != null;
     public PowerTuningService(string path, CancellationToken cancellation = default, Action<string>? diagnosticLog = null)
-        : this(path, new RyzenAdjRunner(cancellation, diagnosticLog), ThermalProfileService.ReadMachineIdentity, diagnosticLog) { }
-    internal PowerTuningService(string path, IRyzenAdjRunner runner, Func<(bool Supported, string Description)> identity, Action<string>? diagnosticLog = null)
-    { ExecutablePath = path; _runner = runner; _identity = new(identity); _diagnosticLog = diagnosticLog; }
+        : this(path, new RyzenAdjRunner(cancellation, diagnosticLog), ThermalProfileService.ReadMachineIdentity, diagnosticLog,
+            new RyzenAdjRunner(CancellationToken.None, diagnosticLog)) { }
+    internal PowerTuningService(string path, IRyzenAdjRunner runner, Func<(bool Supported, string Description)> identity,
+        Action<string>? diagnosticLog = null, IRyzenAdjRunner? rollbackRunner = null)
+    {
+        ExecutablePath = path; _runner = runner; _rollbackRunner = rollbackRunner ?? runner;
+        _identity = new(identity); _diagnosticLog = diagnosticLog;
+    }
 
     public void SetExecutable(string path)
     {
@@ -69,14 +75,16 @@ public sealed class PowerTuningService
             catch (Exception ex)
             {
                 string rollback;
-                try { WriteAndVerify(before); Target = before; rollback = "已恢复操作前参数"; }
+                // Rollback must run even when the caller's token was cancelled (e.g. shutdown
+                // while a write was in flight), so it uses a runner without cancellation.
+                try { WriteAndVerify(before, _rollbackRunner); Target = before; rollback = "已恢复操作前参数"; }
                 catch (Exception restoreError)
                 {
                     rollback = "恢复命令异常：" + restoreError.Message;
                     // A native crash can happen after the SMU accepted a setting. Query independently.
                     try
                     {
-                        Current = Read();
+                        Current = Read(_rollbackRunner);
                         Target = null;
                         rollback += before.Matches(Current) ? "；独立回读已确认恢复操作前参数" : "；实际回读：" + Current;
                     }
@@ -108,26 +116,28 @@ public sealed class PowerTuningService
         catch (Exception ex)
         {
             string actual;
-            try { Current = Read(); actual = "；实际回读：" + Current; }
+            try { Current = Read(_rollbackRunner); actual = "；实际回读：" + Current; }
             catch (Exception readError) { Current = null; actual = "；状态读取失败：" + readError.Message; }
             Message = "恢复参数未确认：" + ex.Message + actual; return false;
         }
     }
 
-    private PowerLimits Read()
+    private PowerLimits Read(IRyzenAdjRunner? runner = null)
     {
+        var source = runner ?? _runner;
         if (!_identity.Value.Supported) throw new InvalidOperationException("机型或 BIOS 未适配功耗预设：" + _identity.Value.Description);
-        var result = _runner.Run(ExecutablePath, new[] { "--info" });
+        var result = source.Run(ExecutablePath, new[] { "--info" });
         if (result.ExitCode != 0) throw new InvalidOperationException("RyzenAdj 读取失败：" + DescribeFailure(result));
         var limits = Parse(result.Output);
         if (limits != null) return limits;
         _diagnosticLog?.Invoke("RyzenAdj --info 解析失败，原始输出：\n" + (result.Output.Length <= 8192 ? result.Output : result.Output[..8192]));
         throw new InvalidOperationException("RyzenAdj 返回的功耗参数格式或数值无效");
     }
-    internal void WriteAndVerify(PowerLimits limits)
+    internal void WriteAndVerify(PowerLimits limits, IRyzenAdjRunner? runner = null)
     {
+        var source = runner ?? _runner;
         if (!limits.Valid) throw new InvalidOperationException("功耗参数无效，未发送设置");
-        var result = _runner.Run(ExecutablePath, new[]
+        var result = source.Run(ExecutablePath, new[]
         {
             // RyzenAdj v0.19.0 Windows cleanup dereferences the PM-table mapping even for
             // setters. --info initializes that mapping before writes; without it cleanup
@@ -138,9 +148,9 @@ public sealed class PowerTuningService
             "--tctl-temp=" + Math.Round(limits.TemperatureC).ToString(CultureInfo.InvariantCulture),
         });
         if (result.ExitCode != 0) throw new InvalidOperationException("RyzenAdj 设置失败：" + DescribeFailure(result));
-        Current = Read();
+        Current = Read(runner);
         if (!limits.Matches(Current)) throw new InvalidOperationException("即时回读未匹配：" + Current);
-        Current = Read();
+        Current = Read(runner);
         if (!limits.Matches(Current)) throw new InvalidOperationException("再次回读未匹配：" + Current);
     }
     internal static PowerLimits? Parse(string text)

@@ -157,12 +157,12 @@ public static class EcIO
         }
     }
 
-    /// <summary>读取 EC RAM 前 size 字节（用于 dump 视图）。单字节失败重试，不中断整体。</summary>
+    /// <summary>读取 EC RAM 前 size 字节（用于 dump 视图）。每个字节最多重试 3 次；
+    /// 任何字节重试后仍失败即返回 null，绝不把失败伪装成 0x00 数据。</summary>
     public static byte[]? Dump(int size)
     {
         if (!IsAvailable) return null;
         var data = new byte[Math.Min(size, 256)];
-        int failures = 0;
         for (ushort i = 0; i < data.Length; i++)
         {
             byte? b = null;
@@ -171,11 +171,15 @@ public static class EcIO
                 b = Read(i);
                 if (b == null) Thread.Sleep(2);
             }
-            if (b == null) { failures++; b = 0; }
+            if (b == null)
+            {
+                Status = $"Dump 在地址 0x{i:X2} 处重试后仍读取失败";
+                return null;
+            }
             data[i] = b.Value;
             Thread.Sleep(1); // 字节间隔，避免 EC 忙不过来
         }
-        return failures > 16 ? null : data; // 超过 1/16 读不到视为整体失败
+        return data;
     }
 
     /// <summary>读物理内存（MMIO）一段字节，走 WinRing0 驱动。失败返回 null。</summary>

@@ -72,10 +72,14 @@ public partial class DeviceCenterView : UserControl
     public void Stop()
     {
         if (_stopping) return;
-        _stopping = true; _timer.Stop(); _cancellation.Cancel();
+        _stopping = true; _timer.Stop();
         if (_started) SystemEvents.PowerModeChanged -= PowerModeChanged;
         // The worker releases the semaphore before returning to the dispatcher, so this cannot deadlock its UI continuation.
-        if (_workGate.Wait(TimeSpan.FromSeconds(12)))
+        // Wait for any in-flight hardware write (e.g. a RyzenAdj preset) to finish BEFORE cancelling,
+        // so the write completes and its rollback path stays usable during shutdown.
+        bool acquired = _workGate.Wait(TimeSpan.FromSeconds(12));
+        _cancellation.Cancel();
+        if (acquired)
         {
             try { if (_backlight.OwnsOff) _devices.SetSwitch(DeviceSwitch.Backlight, true); }
             catch (Exception ex) { App.Log("退出时恢复背光失败：" + ex.Message); }
