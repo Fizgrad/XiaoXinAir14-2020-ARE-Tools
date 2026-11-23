@@ -14,7 +14,6 @@ public partial class MainWindow : Window
     private readonly MonitorService _monitor;
     private readonly bool _energyAvailable;
     private readonly ThermalProfileService _thermalProfiles = new();
-    private readonly System.Windows.Threading.DispatcherTimer _profileTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private bool _profileRequestInProgress;
     private bool _initializing = true, _updatingUiSettings, _ecRequestInProgress;
     private bool _dustCompletionNotice;
@@ -60,6 +59,7 @@ public partial class MainWindow : Window
         _settings = AppSettings.Load();
         DataContext = _settings;
         ControlCenter.FeedbackPublished += message => ActionFeedback.Show(message);
+        HardwareInfo.Settings = _settings;
         HardwareInfo.FeedbackPublished += message => ActionFeedback.Show(message);
         ControlCenter.Initialize(_settings, _thermalProfiles, () => _ = RefreshThermalProfileAsync());
 
@@ -86,7 +86,8 @@ public partial class MainWindow : Window
         SetChip(ChipEnergy, ChipEnergyText, _energyAvailable ? "EnergyDrv：可用" : "EnergyDrv：缺失", _energyAvailable);
         if (!_energyAvailable) LblDustHint.Visibility = Visibility.Visible;
         UpdateFanControls();
-        _profileTimer.Tick += async (_, _) => await RefreshThermalProfileAsync();
+        // Fn+Q 模式由控制中心每 3 秒读一次；这里只跟着它的结果刷新界面，不再各自轮询一遍固件。
+        ControlCenter.ProfilePolled += () => { if (!_shuttingDown && !_profileRequestInProgress) RenderThermalProfile(true); };
         _dustUiTimer.Tick += (_, _) => UpdateFanControls();
 
         // 窗口先显示，驱动加载等重活放到 Loaded 之后，避免卡住启动
@@ -101,7 +102,6 @@ public partial class MainWindow : Window
             });
             await ApplyStartupActionsAsync();
             if (_shuttingDown) return;
-            _profileTimer.Start();
             ControlCenter.Start();
             _ = RefreshThermalProfileAsync();
         };
@@ -232,7 +232,6 @@ public partial class MainWindow : Window
     {
         if (_shuttingDown) return;
         _shuttingDown = true;
-        _profileTimer.Stop();
         _dustUiTimer.Stop();
         ControlCenter.Stop();
         HardwareInfo.Stop();
@@ -469,8 +468,6 @@ public partial class MainWindow : Window
         row.Spark.SetValues(_rowHist[id].Values);
     }
 
-    private static string GpuName(SensorSnapshot s) => s.GpuLoad != null ? "独显/核显传感器" : "GPU";
-
     private void SetChip(Border border, TextBlock text, string value, bool? ok)
     {
         text.Text = value;
@@ -514,34 +511,13 @@ public partial class MainWindow : Window
         {
             bool ok = await Task.Run(request);
             if (_shuttingDown) return;
-            var profile = _thermalProfiles.CurrentProfile;
-            string label = profile switch
+            RenderThermalProfile(ok);
+            if (userInitiated)
             {
-                ThermalProfile.BatterySaving => "节能",
-                ThermalProfile.IntelligentCooling => "智能散热",
-                ThermalProfile.ExtremePerformance => "性能",
-                _ => "未知",
-            };
-            LblProfileCurrent.Text = "当前生效：" + label;
-            LblProfileState.Text = _thermalProfiles.LastMessage;
-            LblProfileState.Foreground = ok ? FgDim : Bad;
-            LblProfileCheckedAt.Text = ok ? "更新于 " + DateTime.Now.ToString("HH:mm:ss") : "读取未完成";
-            foreach (var (button, value) in new[]
-            {
-                (BtnProfileSaving, ThermalProfile.BatterySaving),
-                (BtnProfileIntelligent, ThermalProfile.IntelligentCooling),
-                (BtnProfilePerformance, ThermalProfile.ExtremePerformance),
-            })
-            {
-                button.IsEnabled = _thermalProfiles.IsSupported;
-                bool selected = profile == value;
-                button.Background = selected ? new SolidColorBrush(Color.FromRgb(46, 74, 90)) : (Brush)FindResource("ChipBrush");
-                button.BorderBrush = (Brush)FindResource(selected ? "AccentBrush" : "CardBorderBrush");
-                button.BorderThickness = new Thickness(selected ? 2 : 1);
-                button.Content = ProfileLabels.Name(value) + (selected ? "  ✓ 当前" : "");
+                string label = ProfileLabels.Name(_thermalProfiles.CurrentProfile);
+                Feedback(ok ? FeedbackKind.Success : FeedbackKind.Error,
+                    ok ? requested.HasValue ? "散热模式已切换为" + label : "当前散热模式已读取" : "散热模式未确认", _thermalProfiles.LastMessage);
             }
-            if (userInitiated) Feedback(ok ? FeedbackKind.Success : FeedbackKind.Error,
-                ok ? requested.HasValue ? "散热模式已切换为" + label : "当前散热模式已读取" : "散热模式未确认", _thermalProfiles.LastMessage);
         }
         catch (Exception ex)
         {
@@ -553,7 +529,44 @@ public partial class MainWindow : Window
                 App.Log("散热模式操作失败: " + ex);
             }
         }
-        finally { _profileRequestInProgress = false; BtnProfileRefresh.IsEnabled = true; }
+        finally
+        {
+            // 异常路径也要把按钮恢复到“是否支持”的真实状态，否则要等下一次成功刷新才能再点。
+            _profileRequestInProgress = false;
+            BtnProfileRefresh.IsEnabled = true;
+            if (_thermalProfiles.IsSupported)
+                BtnProfileSaving.IsEnabled = BtnProfileIntelligent.IsEnabled = BtnProfilePerformance.IsEnabled = true;
+        }
+    }
+
+    /// <summary>只按服务里最近一次回读结果刷新“散热与除尘”页，不再发起固件查询。</summary>
+    private void RenderThermalProfile(bool ok)
+    {
+        var profile = _thermalProfiles.CurrentProfile;
+        LblProfileCurrent.Text = "当前生效：" + ProfileLabels.Name(profile);
+        LblProfileState.Text = _thermalProfiles.LastMessage;
+        LblProfileState.Foreground = ok ? FgDim : Bad;
+        LblProfileCheckedAt.Text = ok ? "更新于 " + DateTime.Now.ToString("HH:mm:ss") : "读取未完成";
+        foreach (var (button, value) in new[]
+        {
+            (BtnProfileSaving, ThermalProfile.BatterySaving),
+            (BtnProfileIntelligent, ThermalProfile.IntelligentCooling),
+            (BtnProfilePerformance, ThermalProfile.ExtremePerformance),
+        })
+        {
+            button.IsEnabled = _thermalProfiles.IsSupported;
+            bool selected = profile == value;
+            button.Background = selected ? ProfileSelectedBrush : (Brush)FindResource("ChipBrush");
+            button.BorderBrush = (Brush)FindResource(selected ? "AccentBrush" : "CardBorderBrush");
+            button.BorderThickness = new Thickness(selected ? 2 : 1);
+            button.Content = ProfileLabels.Name(value) + (selected ? "  ✓ 当前" : "");
+        }
+    }
+
+    private static readonly Brush ProfileSelectedBrush = Frozen(Color.FromRgb(46, 74, 90));
+    private static Brush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color); brush.Freeze(); return brush;
     }
 
     private void BtnDustStart_Click(object sender, RoutedEventArgs e)

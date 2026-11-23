@@ -19,7 +19,7 @@ public class AppSettings
     public bool StartWithWindows { get; set; }
     public PowerPreset? StartupPowerPreset { get; set; }
 
-    /// <summary>启用游戏内悬浮窗（热键 Ctrl+Alt+O 开关）</summary>
+    /// <summary>启用游戏内悬浮窗（在主界面勾选或用托盘菜单开关）</summary>
     public bool OverlayEnabled { get; set; } = true;
 
     /// <summary>悬浮窗角落：0 左上 1 右上 2 左下 3 右下</summary>
@@ -29,6 +29,10 @@ public class AppSettings
     public int BacklightIdleSeconds { get; set; } = 0;
     public bool RecordBatteryHistory { get; set; } = true;
     public string RyzenAdjPath { get; set; } = "";
+
+    /// <summary>固件自身的 PPT 限值（短时/持续，W）。功耗服务读到不等于任何预设的值时记录，
+    /// 用于识别上次运行遗留的预设，并作为跨运行的恢复基准。</summary>
+    public PowerLimits? FirmwarePowerLimits { get; set; }
 
     /// <summary>仪表盘行顺序（自上而下），可在界面中调整</summary>
     public List<string> DashboardOrder { get; set; } = new()
@@ -64,6 +68,7 @@ public class AppSettings
                     s.RyzenAdjPath ??= "";
                     s.BacklightIdleSeconds = Math.Clamp(s.BacklightIdleSeconds, 0, 3600);
                     if (s.StartupPowerPreset.HasValue && !Enum.IsDefined(s.StartupPowerPreset.Value)) s.StartupPowerPreset = null;
+                    if (s.FirmwarePowerLimits is { } firmware && !firmware.Valid) s.FirmwarePowerLimits = null;
                     return s;
                 }
             }

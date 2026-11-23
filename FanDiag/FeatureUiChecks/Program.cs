@@ -48,15 +48,15 @@ internal static class Program
             var service = (LenovoDeviceService)typeof(DeviceCenterView).GetField("_devices", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
             typeof(LenovoDeviceService).GetProperty("State")!.SetValue(service, new LenovoDeviceState(0x100240, 0xCE70, "界面检查示例状态"));
             var power = (PowerTuningService)typeof(DeviceCenterView).GetField("_power", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
-            typeof(PowerTuningService).GetProperty("Current")!.SetValue(power, new PowerLimits(15, 12, 70));
-            typeof(PowerTuningService).GetProperty("Original")!.SetValue(power, new PowerLimits(48, 37.5f, 100));
-            typeof(PowerTuningService).GetProperty("Target")!.SetValue(power, new PowerLimits(15, 12, 70));
+            typeof(PowerTuningService).GetProperty("Current")!.SetValue(power, new PowerLimits(15, 12));
+            typeof(PowerTuningService).GetProperty("Original")!.SetValue(power, new PowerLimits(48, 37.5f));
+            typeof(PowerTuningService).GetProperty("Target")!.SetValue(power, new PowerLimits(15, 12));
             typeof(DeviceCenterView).GetField("_deviceReadAt", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(view, DateTimeOffset.Now);
             typeof(DeviceCenterView).GetField("_powerReadAt", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(view, DateTimeOffset.Now);
             typeof(DeviceCenterView).GetMethod("PaintState", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, null);
             typeof(DeviceCenterView).GetMethod("SetBusy", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, new object[] { false });
             var banner = new FeedbackBanner { Margin = new Thickness(12, 8, 12, 0) }; view.FeedbackPublished += banner.Show;
-            Publish(view, FeedbackKind.Success, "安静办公已应用并确认", "短时 15 W · 持续 12 W · 温度上限 70°C；参数回读一致。（界面检查示例）");
+            Publish(view, FeedbackKind.Success, "安静办公已应用并确认", "短时 15 W · 持续 12 W；参数回读一致，温度保护由固件负责。（界面检查示例）");
             var panel = new DockPanel(); DockPanel.SetDock(banner, Dock.Top); panel.Children.Add(banner); panel.Children.Add(view);
             var root = new Border { Background = (Brush)app.Resources["BgBrush"], Child = panel, Width = width, Height = height };
             var window = new Window { Content = root, Width = width, Height = height, Left = -20000, Top = -20000,
@@ -139,14 +139,14 @@ internal static class Program
 
         Publish(view, FeedbackKind.Pending, "处理中", "正在回读");
         Must(((ProgressBar)banner.FindName("Progress")).Visibility == Visibility.Visible, "Pending progress missing");
-        Publish(view, FeedbackKind.Error, "设置未确认", "恢复已确认；当前 48 W / 37.5 W / 100°C");
+        Publish(view, FeedbackKind.Error, "设置未确认", "恢复已确认；当前 48 W / 37.5 W");
         Must(banner.Current?.Kind == FeedbackKind.Error && ((ProgressBar)banner.FindName("Progress")).Visibility == Visibility.Collapsed
             && banner.History[0].Detail.Contains("恢复已确认"), "Failure details or history lost");
         Console.WriteLine("PASS pending, failure, recovery detail and history stay visible");
 
         var power = (PowerTuningService)typeof(DeviceCenterView).GetField("_power", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(view)!;
-        typeof(PowerTuningService).GetProperty("Current")!.SetValue(power, new PowerLimits(20, 15, 75));
-        typeof(PowerTuningService).GetProperty("Target")!.SetValue(power, new PowerLimits(15, 12, 70));
+        typeof(PowerTuningService).GetProperty("Current")!.SetValue(power, new PowerLimits(20, 15));
+        typeof(PowerTuningService).GetProperty("Target")!.SetValue(power, new PowerLimits(15, 12));
         typeof(DeviceCenterView).GetMethod("PaintState", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, null);
         Must(Control<TextBlock>("PowerStatus").Text.Contains("偏离") && !Control<TextBlock>("QuietTitle").Text.Contains("当前")
             && banner.Current?.Kind == FeedbackKind.Error, "External override did not clear active preset or overwrote last result");

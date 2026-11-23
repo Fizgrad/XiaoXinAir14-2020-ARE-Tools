@@ -34,12 +34,22 @@ public partial class DeviceCenterView
         if (_stopping) return;
         if (_busy)
         {
-            if (!background && LastFeedback?.Kind != FeedbackKind.Pending)
-                Publish(FeedbackKind.Info, "上一个操作仍在处理", "请稍候。");
+            // 后台刷新与用户操作重叠：后台刷新直接跳过本轮；用户操作排到当前这一轮之后执行，而不是丢弃。
+            if (background) return;
+            if (!_backgroundBusy || _queued.HasValue)
+            {
+                if (LastFeedback?.Kind != FeedbackKind.Pending)
+                    Publish(FeedbackKind.Info, "上一个操作仍在处理", "请稍候。");
+                return;
+            }
+            _queued = (operation, pendingTitle);
+            if (LastFeedback?.Kind != FeedbackKind.Pending) Publish(FeedbackKind.Pending, pendingTitle, "等待当前刷新完成后执行。");
             return;
         }
         if (!background) Publish(FeedbackKind.Pending, pendingTitle, "请稍候。");
-        _busy = true; SetBusy(true);
+        _busy = true; _backgroundBusy = background;
+        // 只有用户操作才禁用控件：后台刷新每 3 秒一次，跟着禁用会让按钮和开关不停闪烁。
+        if (!background) SetBusy(true);
         OperationResult? result = null;
         await _workGate.WaitAsync();
         try
@@ -57,12 +67,18 @@ public partial class DeviceCenterView
         }
         finally
         {
-            _busy = false;
-            if (!_stopping) { PaintState(); SetBusy(false); }
+            _busy = false; _backgroundBusy = false;
+            if (!_stopping) { PaintState(); if (!background) SetBusy(false); }
         }
         if (!_stopping && result != null)
             Publish(result.Success ? FeedbackKind.Success : FeedbackKind.Error,
                 result.Success ? result.SuccessTitle : result.ErrorTitle, result.Detail);
+        var next = _queued;
+        if (next.HasValue && !_stopping)
+        {
+            _queued = null;
+            _ = RunOperationAsync(next.Value.Operation, next.Value.Title);
+        }
     }
 
     private void InitializeFeedback()
@@ -138,16 +154,21 @@ public partial class DeviceCenterView
         if (_power == null) return;
         var current = _power.Current;
         PowerFastValue.Text = Unit(current?.FastW, " W"); PowerSlowValue.Text = Unit(current?.SlowW, " W");
-        PowerTemperatureValue.Text = Unit(current?.TemperatureC, " °C", "0");
-        bool changed = current != null && _power.Target != null && !current.Matches(_power.Target);
+        bool changed = PowerOverridden;
+        string applied = _selectedPreset is { } appliedPreset ? "预设「" + PresetName(appliedPreset) + "」" : "上次设置的参数";
         PowerCurrent.Text = current == null ? "当前限制：尚未读取或不可用" : changed
-            ? "参数已改变 · 更新于 " + ReadTime(_powerReadAt) : "当前生效值 · 更新于 " + ReadTime(_powerReadAt);
+            ? applied + "已被固件覆盖 · 当前 " + current + " · 更新于 " + ReadTime(_powerReadAt)
+            : "当前生效值 " + current + " · 更新于 " + ReadTime(_powerReadAt);
         PowerCurrent.Foreground = (Brush)FindResource(changed ? "WarnBrush" : "FgBrush");
-        PowerCurrentCard.Background = changed ? new SolidColorBrush(Color.FromRgb(51, 44, 32)) : new SolidColorBrush(Color.FromRgb(27, 37, 44));
-        PowerStatus.Text = changed ? "当前值已偏离上次设置，可重新选择预设。"
-            : current != null ? "每 15 秒刷新" : _power.Message;
+        PowerCurrentCard.Background = changed ? PowerCardOverriddenBrush : PowerCardBrush;
+        PowerStatus.Text = changed
+            ? "当前值已偏离上次设置的预设。固件在 Fn+Q 散热模式切换（热键、联想工具或自动场景）后会重新下发自己的限值；"
+              + "这里只提示、不自动重写，需要时点“重新应用上次预设”或重新选择预设。"
+            : current != null ? (_power.BaselineNote.Length > 0 ? _power.BaselineNote : "每 15 秒刷新；Fn+Q 切换后若预设被覆盖，会在这里提示")
+            : _power.Message;
         PowerStatus.Foreground = (Brush)FindResource(changed || current == null ? "WarnBrush" : "FgDimBrush");
         PowerOriginal.Text = _power.Original is { } original ? "可恢复的原参数：" + original : "恢复基准：首次应用预设时记录";
+        ReapplyPower.IsEnabled = changed && !(_busy && !_backgroundBusy);
         PowerPreset? selected = _selectedPreset is { } last && current != null && current.Matches(_power.Preview(last)) ? last : null;
         if (!selected.HasValue && current != null)
             selected = Enum.GetValues<PowerPreset>().Cast<PowerPreset?>().FirstOrDefault(p => current.Matches(PowerTuningService.RequestedLimits(p!.Value)));
@@ -159,7 +180,7 @@ public partial class DeviceCenterView
         {
             var preview = _power.Preview(preset); bool active = selected == preset;
             SelectButton(button, active); title.Text = PresetName(preset) + (active ? "  ✓ 当前" : "");
-            values.Text = $"{preview.FastW:0.#} W / {preview.SlowW:0.#} W / {preview.TemperatureC:0.#}°C";
+            values.Text = $"{preview.FastW:0.#} W / {preview.SlowW:0.#} W";
             button.ToolTip = "将应用：" + preview;
         }
     }
@@ -244,9 +265,18 @@ public partial class DeviceCenterView
     { DeviceSwitch.FnLock => "Fn 锁定", DeviceSwitch.UsbAc => "插电 USB 持续供电", DeviceSwitch.UsbBattery => "电池 USB 持续供电", _ => "键盘背光" };
     private static string DeviceValueName(DeviceSwitch feature, bool? value) => value == null ? "状态未知"
         : feature == DeviceSwitch.FnLock ? value.Value ? "F1–F12 优先" : "亮度／音量热键优先" : value.Value ? "已开启" : "已关闭";
+    // 画刷只创建一次并 Freeze：渲染每 3 秒跑一轮，原先每轮都 new 未冻结的画刷，纯属 GC 压力。
+    private static readonly Brush PowerCardBrush = Frozen(Color.FromRgb(27, 37, 44));
+    private static readonly Brush PowerCardOverriddenBrush = Frozen(Color.FromRgb(51, 44, 32));
+    private static readonly Brush SelectedPresetBrush = Frozen(Color.FromRgb(38, 67, 80));
+    private static readonly Brush PositiveBadgeBrush = Frozen(Color.FromRgb(34, 57, 42));
+    private static Brush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color); brush.Freeze(); return brush;
+    }
     private void SelectButton(Button button, bool selected)
     {
-        button.Background = selected ? new SolidColorBrush(Color.FromRgb(38, 67, 80)) : (Brush)FindResource("ChipBrush");
+        button.Background = selected ? SelectedPresetBrush : (Brush)FindResource("ChipBrush");
         button.BorderBrush = (Brush)FindResource(selected ? "AccentBrush" : "CardBorderBrush");
         button.BorderThickness = new Thickness(selected ? 2 : 1);
     }
@@ -254,6 +284,6 @@ public partial class DeviceCenterView
     {
         label.Text = text;
         label.Foreground = (Brush)FindResource(positive == true ? "GoodBrush" : positive == false ? "FgBrush" : "WarnBrush");
-        badge.Background = positive == true ? new SolidColorBrush(Color.FromRgb(34, 57, 42)) : (Brush)FindResource("ChipBrush");
+        badge.Background = positive == true ? PositiveBadgeBrush : (Brush)FindResource("ChipBrush");
     }
 }

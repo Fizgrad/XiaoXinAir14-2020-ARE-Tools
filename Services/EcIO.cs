@@ -127,6 +127,21 @@ public static class EcIO
         return false;
     }
 
+    /// <summary>解除 Ring0 绑定。MonitorService 释放 LHM Computer 后必须调用，否则 IsAvailable 仍为 true，
+    /// 之后的端口访问会在驱动已关闭的情况下失败。</summary>
+    public static void Reset()
+    {
+        lock (Gate)
+        {
+            IsAvailable = false;
+            MmioAvailable = false;
+            _readIo = _writeIo = _waitMutex = _releaseMutex = null;
+            _readMemByte = _readMemBytes = null;
+            _isOpen = null; _open = null;
+            Status = "未初始化";
+        }
+    }
+
     /// <summary>读 EC RAM 一个字节（ACPI EC 协议：0x80 命令 + 单字节地址）。失败（超时）返回 null。</summary>
     public static byte? Read(ushort address)
     {
@@ -139,11 +154,21 @@ public static class EcIO
                 try
                 {
                     if (!WaitBit(FlagIbf, false, 20)) return Fail<byte?>("等 IBF 超时");
+                    // 上一次读取超时后，EC 迟到的数据会留在输出缓冲；此时直接发新命令会先读到旧字节，
+                    // 之后整段数据悄悄错位一字节。发命令前先确认 OBF 已清，仍有残留就读数据口排空。
+                    if (!WaitBit(FlagObf, false, 5))
+                    {
+                        ReadPort(DataPort);
+                        if (!WaitBit(FlagObf, false, 20)) return Fail<byte?>("等 OBF 清空超时");
+                    }
                     WritePort(StatusPort, CmdRead);
                     if (!WaitBit(FlagIbf, false, 20)) return Fail<byte?>("等 IBF 超时");
                     WritePort(DataPort, (byte)address);
-                    if (!WaitBit(FlagObf, true, 20)) return Fail<byte?>("等 OBF 超时");
-                    return ReadPort(DataPort);
+                    // EC 处理风扇/温度事件的短暂忙碌可持续几十毫秒；20 ms 实测偶发超时（约 1/19 次 dump）。
+                    if (!WaitBit(FlagObf, true, 50)) return Fail<byte?>("等 OBF 超时");
+                    byte value = ReadPort(DataPort);
+                    if (Status != "就绪") Status = "就绪"; // 一次瞬时失败不应让状态行永远停在失败原因
+                    return value;
                 }
                 finally
                 {
@@ -157,7 +182,7 @@ public static class EcIO
         }
     }
 
-    /// <summary>读取 EC RAM 前 size 字节（用于 dump 视图）。每个字节最多重试 3 次；
+    /// <summary>读取 EC RAM 前 size 字节（用于 dump 视图）。每个字节最多重试 4 次，重试间隔 15 ms 以跨过 EC 的短暂忙碌；
     /// 任何字节重试后仍失败即返回 null，绝不把失败伪装成 0x00 数据。</summary>
     public static byte[]? Dump(int size)
     {
@@ -166,14 +191,14 @@ public static class EcIO
         for (ushort i = 0; i < data.Length; i++)
         {
             byte? b = null;
-            for (int attempt = 0; attempt < 3 && b == null; attempt++)
+            for (int attempt = 0; attempt < 4 && b == null; attempt++)
             {
                 b = Read(i);
-                if (b == null) Thread.Sleep(2);
+                if (b == null) Thread.Sleep(15);
             }
             if (b == null)
             {
-                Status = $"Dump 在地址 0x{i:X2} 处重试后仍读取失败";
+                Status = $"Dump 在地址 0x{i:X2} 处重试后仍读取失败（{_lastError}）";
                 return null;
             }
             data[i] = b.Value;
@@ -231,7 +256,8 @@ public static class EcIO
 
     private static T Fail<T>(string reason)
     {
-        Status = reason;
+        Status = reason; _lastError = reason;
         return default!;
     }
+    private static string _lastError = "";
 }

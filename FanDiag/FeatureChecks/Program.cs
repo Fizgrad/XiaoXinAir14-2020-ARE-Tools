@@ -26,7 +26,7 @@ if (args is ["--power-verify-current", var verifyExecutable])
     if (!power.Refresh()) throw new InvalidOperationException(power.Message);
     var original = power.Current!;
     Console.WriteLine("Before: " + original);
-    // Deliberately writes only the three values that were just read, with --info initialization.
+    // Deliberately writes back only the two power values that were just read, with --info initialization.
     power.WriteAndVerify(original);
     Console.WriteLine("Verified current limits unchanged: " + power.Current);
     return;
@@ -39,6 +39,23 @@ if (args is ["--power-test-quiet", var testExecutable, var evidencePath])
 if (args is ["--power-test-other-presets", var presetsExecutable, var presetsEvidencePath])
 {
     Environment.ExitCode = LivePowerCheck.VerifyAdditionalPresets(Path.GetFullPath(presetsExecutable), Path.GetFullPath(presetsEvidencePath));
+    return;
+}
+if (args is ["--power-soak", var soakExecutable, var soakEvidencePath, var loadText, var idleText]
+    && int.TryParse(loadText, out int soakLoad) && int.TryParse(idleText, out int soakIdle))
+{
+    if (soakLoad is < 30 or > 900 || soakIdle is < 0 or > 600) throw new ArgumentException("Load seconds must be 30-900 and idle seconds 0-600");
+    Environment.ExitCode = LivePowerCheck.Soak(Path.GetFullPath(soakExecutable), Path.GetFullPath(soakEvidencePath), soakLoad, soakIdle);
+    return;
+}
+if (args is ["--power-profile-trigger", var triggerExecutable, var triggerEvidencePath])
+{
+    Environment.ExitCode = LivePowerCheck.ProfileTrigger(Path.GetFullPath(triggerExecutable), Path.GetFullPath(triggerEvidencePath));
+    return;
+}
+if (args is ["--power-baseline", var baselineExecutable, var baselineEvidencePath])
+{
+    Environment.ExitCode = LivePowerCheck.BaselineRecovery(Path.GetFullPath(baselineExecutable), Path.GetFullPath(baselineEvidencePath));
     return;
 }
 if (args.Length > 0) throw new ArgumentException("Unknown check mode");
@@ -68,7 +85,11 @@ var checks = new (string Name, Action Run)[]
     ("sleep history respects opt-out and computes net loss", BatterySleep),
     ("power parser rejects other CPUs and incomplete tables", PowerParser),
     ("power presets clamp to OEM limits and restore original", PowerApply),
+    ("firmware limits are remembered only when they differ from presets", PowerBaselineMemory),
+    ("leftover preset does not become the restore baseline", PowerLeftoverBaseline),
+    ("leftover without firmware baseline stays conservative", PowerLeftoverUnknown),
     ("independent fast and slow limits can read, apply and restore", PowerIndependentLimits),
+    ("firmware thermal limit is read without setters", ThermalLimitRead),
     ("unrecognized table output is recorded for diagnosis", PowerParseLog),
     ("partial power failure rolls back before reporting failure", PowerRollback),
     ("power readback mismatch is rejected", PowerMismatch),
@@ -256,24 +277,33 @@ static void BatterySleep()
     var disabledDir = CheckDir(); var off = new BatteryHistoryService(disabledDir); off.Add(before, false);
     Require(!Directory.Exists(disabledDir), "Opted-out records written");
 }
-static string Table(PowerLimits p, string family = "Renoir") => $"CPU Family: {family}\n| PPT LIMIT FAST | {p.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {p.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |\n| THM LIMIT CORE | {p.TemperatureC.ToString(CultureInfo.InvariantCulture)} | tctl-temp |";
+static string Table(PowerLimits p, string family = "Renoir") => $"CPU Family: {family}\n| PPT LIMIT FAST | {p.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {p.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |";
 static void PowerParser()
 {
-    var p = new PowerLimits(30, 25, 95); Require(PowerTuningService.Parse(Table(p)) == p, "Valid power table rejected");
-    var independent = new PowerLimits(25, 37.5f, 80);
+    var p = new PowerLimits(30, 25); Require(PowerTuningService.Parse(Table(p)) == p, "Valid power table rejected");
+    var independent = new PowerLimits(25, 37.5f);
     Require(PowerTuningService.Parse(Table(independent)) == independent, "Actual firmware limits were rejected because slow limit exceeded fast limit");
     Require(PowerTuningService.Parse(Table(p, "Cezanne")) == null && PowerTuningService.Parse("CPU Family: Renoir") == null, "Invalid power table accepted");
-    Require(PowerTuningService.Parse(Table(new(0, 0, 0))) == null, "Zero limits accepted");
-    Require(PowerTuningService.Parse(Table(new(25, 150, 80))) == null, "Out-of-range slow limit accepted");
+    Require(PowerTuningService.Parse(Table(new(0, 0))) == null, "Zero limits accepted");
+    Require(PowerTuningService.Parse(Table(new(25, 150))) == null, "Out-of-range slow limit accepted");
 }
 static void PowerIndependentLimits()
 {
-    var (s, d) = PowerRig(); var original = d.Current = new(25, 37.5f, 80);
+    var (s, d) = PowerRig(); var original = d.Current = new(25, 37.5f);
     Require(s.Refresh() && s.Current == original && d.Arguments.Count == 1, "Read-only refresh rejected independent limits or issued writes");
-    Require(s.Apply(PowerPreset.Quiet) && s.Current == new PowerLimits(15, 12, 70), "Preset could not be applied from actual firmware limits");
+    Require(s.Apply(PowerPreset.Quiet) && s.Current == new PowerLimits(15, 12), "Preset could not be applied from actual firmware limits");
+    Require(d.Arguments.Last().All(v => !v.StartsWith("--tctl-temp")), "Temperature limit was written to the SMU");
     Require(s.Restore() && s.Current == original && d.Current == original, "Independent original limits were not restored exactly");
     d.FailNextWrite = true;
     Require(!s.Apply(PowerPreset.Quiet) && d.Current == original && s.Current == original, "Partial failure could not roll back independent limits");
+}
+static void ThermalLimitRead()
+{
+    var d = new FakeRyzen { InfoOutput = "CPU Family: Renoir\n| PPT LIMIT FAST | 22 | fast-limit |\n| THM LIMIT CORE | 95 | tctl-temp |" };
+    var (limit, message) = PowerTuningService.ReadFirmwareThermalLimit("C:\\test\\ryzenadj.exe", d);
+    Require(limit == 95 && message.Length == 0, "Firmware thermal limit was not read");
+    Require(d.Arguments.Count == 1 && d.Arguments[0].SequenceEqual(new[] { "--info" }), "Thermal limit read sent a setter");
+    Require(PowerTuningService.ParseThermalLimit("CPU Family: Renoir\nPM Table Version: 370005") == null, "Missing thermal limit accepted");
 }
 static void PowerParseLog()
 {
@@ -286,7 +316,7 @@ static (PowerTuningService S, FakeRyzen D) PowerRig()
 static void PowerApply()
 {
     var (s, d) = PowerRig(); var original = d.Current;
-    Require(s.Apply(PowerPreset.Sustained) && s.Current == new PowerLimits(22, 20, 85), "Preset exceeded OEM limits");
+    Require(s.Apply(PowerPreset.Sustained) && s.Current == new PowerLimits(22, 20), "Preset exceeded OEM limits");
     Require(d.Arguments.All(a => a.All(v => !v.Contains("stapm") && !v.Contains("gfx"))), "Unsupported Renoir tuning option sent");
     Require(s.Restore() && s.Current == original && s.Original == null, "Original limits not restored");
     var unsupported = new PowerTuningService("unused", d, () => (false, "other")); int calls = d.Arguments.Count;
@@ -296,6 +326,44 @@ static void PowerRollback()
 {
     var (s, d) = PowerRig(); var original = d.Current; d.FailNextWrite = true;
     Require(!s.Apply(PowerPreset.Quiet) && d.Current == original && s.Message.Contains("已恢复操作前参数"), "Partial power write not rolled back");
+}
+static (PowerTuningService S, FakeRyzen D) BaselineRig(BaselineStore store)
+{
+    var d = new FakeRyzen();
+    return (new PowerTuningService("C:\\test\\ryzenadj.exe", d, () => (true, "test"), null, null,
+        () => store.Value, l => { store.Value = l; store.Writes++; }), d);
+}
+static void PowerBaselineMemory()
+{
+    var store = new BaselineStore(); var (s, d) = BaselineRig(store);
+    Require(s.Refresh() && store.Writes == 1 && store.Value == new PowerLimits(22, 20), "Firmware limits were not remembered");
+    s.Refresh(); Require(store.Writes == 1, "Unchanged firmware limits were written again");
+    d.Current = new(15, 12); s.Refresh();
+    Require(store.Writes == 1 && store.Value == new PowerLimits(22, 20), "A preset value was mistaken for firmware limits");
+    d.Current = new(25, 18); s.Apply(PowerPreset.Quiet);
+    d.Current = new(30, 25); s.Refresh();
+    Require(store.Value == new PowerLimits(22, 20), "A value equal to the Sustained preset was mistaken for firmware limits");
+    d.Current = new(35, 28); s.Refresh();
+    Require(store.Value == new PowerLimits(35, 28), "New firmware limits were not remembered");
+}
+static void PowerLeftoverBaseline()
+{
+    // 上次运行应用了“安静办公”后没有恢复：新一次运行读到的当前值正是 15/12。
+    var store = new BaselineStore { Value = new(48, 37.5f) }; var (s, d) = BaselineRig(store);
+    d.Current = new(15, 12);
+    Require(s.Apply(PowerPreset.Balanced) && s.Current == new PowerLimits(25, 18), "Balanced was clamped to the leftover preset");
+    Require(s.Original == new PowerLimits(48, 37.5f) && s.BaselineNote.Contains("遗留"), "Restore baseline is not the recorded firmware value");
+    Require(s.Message.Contains("遗留"), "Leftover detection was not reported");
+    Require(s.Restore() && s.Current == new PowerLimits(48, 37.5f) && d.Current == new PowerLimits(48, 37.5f), "Restore did not return to firmware limits");
+    Require(s.Original == null && s.BaselineNote == "", "Baseline note survived restore");
+}
+static void PowerLeftoverUnknown()
+{
+    // 从未记录过固件值：只能保守地以当前值为基准，但必须说明如何回到固件默认。
+    var (s, d) = BaselineRig(new BaselineStore());
+    d.Current = new(15, 12);
+    Require(s.Apply(PowerPreset.Sustained) && s.Current == new PowerLimits(15, 12) && s.Original == new PowerLimits(15, 12), "Unknown baseline exceeded current limits");
+    Require(s.BaselineNote.Contains("Fn+Q"), "No hint how to recover firmware defaults");
 }
 static void PowerMismatch()
 { var (s, d) = PowerRig(); d.Freeze = true; Require(!s.Apply(PowerPreset.Quiet), "Stale power limits accepted"); }
@@ -348,17 +416,19 @@ sealed class FakeEnergy : IEnergyTransport
 sealed class FakeRyzen : IRyzenAdjRunner
 {
     public string? InfoOutput;
-    public PowerLimits Current = new(22, 20, 95);
+    public PowerLimits Current = new(22, 20);
     public bool FailNextWrite, Freeze, CrashAfterWrite;
     public List<string[]> Arguments { get; } = new();
     public CommandResult Run(string path, IReadOnlyList<string> arguments)
     {
         Arguments.Add(arguments.ToArray());
-        if (arguments.SequenceEqual(new[] { "--info" })) return new(0, InfoOutput ?? $"CPU Family: Renoir\n| PPT LIMIT FAST | {Current.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {Current.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |\n| THM LIMIT CORE | {Current.TemperatureC.ToString(CultureInfo.InvariantCulture)} | tctl-temp |");
+        if (arguments.SequenceEqual(new[] { "--info" })) return new(0, InfoOutput ?? $"CPU Family: Renoir\n| PPT LIMIT FAST | {Current.FastW.ToString(CultureInfo.InvariantCulture)} | fast-limit |\n| PPT LIMIT SLOW | {Current.SlowW.ToString(CultureInfo.InvariantCulture)} | slow-limit |");
         float Value(string prefix) => float.Parse(arguments.Single(a => a.StartsWith(prefix)).Split('=')[1], CultureInfo.InvariantCulture);
         if (FailNextWrite) { Current = Current with { FastW = Value("--fast-limit") / 1000 }; FailNextWrite = false; return new(1, "partial failure"); }
-        if (!Freeze) Current = new(Value("--fast-limit") / 1000, Value("--slow-limit") / 1000, Value("--tctl-temp"));
+        if (!Freeze) Current = new(Value("--fast-limit") / 1000, Value("--slow-limit") / 1000);
         if (CrashAfterWrite) return new(unchecked((int)0xC0000005), "");
         return new(0, "Success");
     }
 }
+// 模拟界面注入的固件基准存储（真实程序里写入 settings.json）。
+sealed class BaselineStore { public PowerLimits? Value; public int Writes; }

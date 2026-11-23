@@ -61,8 +61,13 @@ internal sealed class WindowsHardwareInventoryProbe : IHardwareInventoryProbe
 public sealed class HardwareInventoryReader
 {
     private readonly IHardwareInventoryProbe _probe;
+    private readonly Func<(float? LimitC, string Message)>? _thermalLimit;
     public HardwareInventoryReader() : this(new WindowsHardwareInventoryProbe()) { }
-    internal HardwareInventoryReader(IHardwareInventoryProbe probe) => _probe = probe;
+    /// <summary>传入只读温度墙探针（硬件信息页展示用）；传 null 则不读取该项。</summary>
+    public HardwareInventoryReader(Func<(float? LimitC, string Message)>? thermalLimit) : this(new WindowsHardwareInventoryProbe(), thermalLimit) { }
+    internal HardwareInventoryReader(IHardwareInventoryProbe probe) : this(probe, null) { }
+    internal HardwareInventoryReader(IHardwareInventoryProbe probe, Func<(float? LimitC, string Message)>? thermalLimit)
+    { _probe = probe; _thermalLimit = thermalLimit; }
 
     public HardwareInventoryReport Scan(CancellationToken cancellation = default, IProgress<string>? progress = null)
     {
@@ -91,6 +96,19 @@ public sealed class HardwareInventoryReader
         foreach (var row in Read("处理器", "SELECT Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed,SocketDesignation,ProcessorId,Status FROM Win32_Processor"))
             Add("处理器", Text(row, "Name"), row, F("制造商", Value(row, "Manufacturer")), F("核心 / 线程", Display(Value(row, "NumberOfCores")) + " / " + Display(Value(row, "NumberOfLogicalProcessors"))),
                 F("最高标称频率", PositiveUnit(Number(row, "MaxClockSpeed"), " MHz")), F("插槽", Value(row, "SocketDesignation")), F("处理器 ID", Value(row, "ProcessorId")));
+        if (_thermalLimit != null)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            progress?.Report("正在读取固件温度墙…");
+            var thermal = _thermalLimit();
+            devices.Add(thermal.LimitC is { } limit
+                ? new HardwareItem("处理器", "CPU 固件温度墙", HardwareStatus.Unknown, "只读",
+                    new[] { F("当前温度墙上限", limit.ToString("0.#", CultureInfo.InvariantCulture) + " °C"),
+                        F("数据来源", "RyzenAdj --info · THM LIMIT CORE"),
+                        F("写入策略", "只读展示；本程序不写入温度墙") })
+                : new HardwareItem("处理器", "CPU 固件温度墙", HardwareStatus.Unknown, "暂无数据",
+                    new[] { F("读取情况", thermal.Message) }));
+        }
         foreach (var row in Read("主板", "SELECT Manufacturer,Product,Version,SerialNumber,Status FROM Win32_BaseBoard"))
             Add("主板与 BIOS", Text(row, "Product"), row, F("制造商", Value(row, "Manufacturer")), F("版本", Value(row, "Version")), F("序列号", Value(row, "SerialNumber")));
         foreach (var row in Read("BIOS", "SELECT Manufacturer,SMBIOSBIOSVersion,ReleaseDate,SerialNumber,Status FROM Win32_BIOS"))

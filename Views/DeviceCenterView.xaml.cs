@@ -26,7 +26,11 @@ public partial class DeviceCenterView : UserControl
     private PowerTuningService? _power;
     private BatteryReading? _battery;
     private Action? _profileChanged;
-    private bool _busy, _started, _monitorPower;
+    private bool _busy, _started, _monitorPower, _backgroundBusy;
+    // 用户操作与后台刷新重叠时排队到当前这一轮之后执行，而不是直接丢弃。
+    private (Func<OperationResult?> Operation, string Title)? _queued;
+    private ThermalProfile _lastProfile = ThermalProfile.Unknown;
+    private DateTimeOffset _powerRecheckUntil = DateTimeOffset.MinValue;
     private volatile bool _stopping;
     private DateTimeOffset _lastPowerRead = DateTimeOffset.MinValue;
     private DateTimeOffset? _lastSleepEnd;
@@ -42,7 +46,8 @@ public partial class DeviceCenterView : UserControl
         _settings = settings; _profiles = profiles; _profileChanged = profileChanged;
         _history = new(Path.Combine(settings.ConfigDir, "battery-history"));
         string bundled = Path.Combine(AppContext.BaseDirectory, "tools", "ryzenadj", "ryzenadj.exe");
-        _power = new(string.IsNullOrWhiteSpace(settings.RyzenAdjPath) ? bundled : settings.RyzenAdjPath, _cancellation.Token, App.Log);
+        _power = new(string.IsNullOrWhiteSpace(settings.RyzenAdjPath) ? bundled : settings.RyzenAdjPath, _cancellation.Token, App.Log,
+            () => settings.FirmwarePowerLimits, limits => RememberFirmwareLimits(settings, limits));
         RyzenAdjPath.Text = _power.ExecutablePath;
         var options = new[] { ThermalProfile.BatterySaving, ThermalProfile.IntelligentCooling, ThermalProfile.ExtremePerformance }
             .Select(p => new ModeOption(p, ProfileLabels.Name(p))).ToArray();
@@ -61,6 +66,18 @@ public partial class DeviceCenterView : UserControl
         HistoryStatus.Text = "记录目录：" + Path.Combine(settings.ConfigDir, "battery-history");
         _timer.Tick += async (_, _) => await TickAsync();
         InitializeFeedback();
+    }
+
+    /// <summary>固件自身限值由工作线程读到；保存统一切回界面线程，避免与界面上的设置保存并发写同一个文件。</summary>
+    private void RememberFirmwareLimits(AppSettings settings, PowerLimits limits)
+    {
+        void Save()
+        {
+            if (_stopping || settings.FirmwarePowerLimits is { } known && known.Matches(limits)) return;
+            settings.FirmwarePowerLimits = limits;
+            if (!settings.TrySave(out string error)) App.Log("固件功耗基准保存失败：" + error);
+        }
+        if (Dispatcher.CheckAccess()) Save(); else Dispatcher.BeginInvoke(Save);
     }
 
     public void Start()
@@ -94,6 +111,9 @@ public partial class DeviceCenterView : UserControl
         AutomationStatus.Text = _automation.Status;
         RenderAutomation();
     }
+
+    /// <summary>每轮后台刷新读完 Fn+Q 模式后触发（界面线程）。主窗口据此刷新“散热与除尘”页，不再各自轮询固件。</summary>
+    public event Action? ProfilePolled;
 
     public async Task ApplyStartupPresetAsync(PowerPreset preset)
     {
@@ -144,15 +164,22 @@ public partial class DeviceCenterView : UserControl
     {
         if (!_started || _stopping || _settings == null || _profiles == null || _power == null) return;
         var settings = _settings.Automation; int timeout = _settings.BacklightIdleSeconds;
-        bool readPower = _monitorPower && DateTimeOffset.Now - _lastPowerRead >= TimeSpan.FromSeconds(15);
-        bool changed = false;
+        bool changed = false, polled = false;
         await ExecuteAsync(() =>
         {
             _devices.Refresh();
             _deviceReadAt = DateTimeOffset.Now;
             if (_stopping) return;
-            _profiles.Refresh();
-            var decision = _automation.Evaluate(settings, _profiles.CurrentProfile, BatteryReader.PowerOnline(),
+            _profiles.Refresh(); polled = true;
+            var profile = _profiles.CurrentProfile;
+            if (ProfileLabels.Valid(profile))
+            {
+                // Fn+Q 一变，固件就会重新下发自己的限值并覆盖功耗预设；切换后的 9 秒内每轮都回读，
+                // 尽快把“已被覆盖”显示出来（固件下发可能滞后几秒）。
+                if (ProfileLabels.Valid(_lastProfile) && profile != _lastProfile) _powerRecheckUntil = DateTimeOffset.Now.AddSeconds(9);
+                _lastProfile = profile;
+            }
+            var decision = _automation.Evaluate(settings, profile, BatteryReader.PowerOnline(),
                 settings.Applications.Count > 0 && settings.Enabled ? ReadProcesses() : new HashSet<string>(), DateTimeOffset.Now);
             if (decision != null && !_stopping)
             {
@@ -166,9 +193,12 @@ public partial class DeviceCenterView : UserControl
                 bool? target = _backlight.Evaluate(timeout, seconds, _devices.State.Value(DeviceSwitch.Backlight), DateTimeOffset.Now);
                 if (target.HasValue && !_stopping) _backlight.Complete(target.Value, _devices.SetSwitch(DeviceSwitch.Backlight, target.Value));
             }
-            if (readPower && !_stopping) { _lastPowerRead = DateTimeOffset.Now; _power.Refresh(); _powerReadAt = DateTimeOffset.Now; }
+            bool due = DateTimeOffset.Now - _lastPowerRead >= TimeSpan.FromSeconds(15);
+            if (_monitorPower && (due || _power.Target != null && DateTimeOffset.Now < _powerRecheckUntil) && !_stopping)
+            { _lastPowerRead = DateTimeOffset.Now; _power.Refresh(); _powerReadAt = DateTimeOffset.Now; }
         }, background: true);
         if (changed && !_stopping) _profileChanged?.Invoke();
+        if (polled && !_stopping) ProfilePolled?.Invoke();
     }
 
     private Task ExecuteAsync(Action work, bool background = false) => RunOperationAsync(() => { work(); return null; }, "正在更新状态", background);
@@ -179,7 +209,10 @@ public partial class DeviceCenterView : UserControl
         PowerPathControls.IsEnabled = ReadPower.IsEnabled = !busy;
         PresetControls.IsEnabled = !busy && _power?.Ready == true;
         RestorePower.IsEnabled = !busy && _power?.Original != null;
+        ReapplyPower.IsEnabled = !busy && PowerOverridden;
     }
+    // 上次设置的预设已被固件（Fn+Q 切换等）覆盖：只提示，不自动重写，由用户决定是否重新应用。
+    private bool PowerOverridden => _power?.Current != null && _power.Target != null && !_power.Target.Matches(_power.Current);
     private void PaintState() => RenderCurrentState();
 
     private async void RefreshDevices_Click(object sender, RoutedEventArgs e) => await RunOperationAsync(() =>
@@ -294,18 +327,30 @@ public partial class DeviceCenterView : UserControl
     private async void PowerPreset_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button button || !Enum.TryParse<PowerPreset>(button.Tag?.ToString(), out var preset)) return;
-        if (_busy || _stopping) return;
+        await ApplyPresetAsync(preset);
+    }
+    private async void ReapplyPower_Click(object sender, RoutedEventArgs e)
+    {
+        // 只重新应用本次运行里用户选定的预设；没有选定过（例如刚启动）时按当前值反推一个，不凭空猜测。
+        PowerPreset? preset = _selectedPreset ?? (_power?.Target is { } target
+            ? Enum.GetValues<PowerPreset>().Cast<PowerPreset?>().FirstOrDefault(p => PowerTuningService.RequestedLimits(p!.Value).Matches(target)) : null);
+        if (preset is { } known) await ApplyPresetAsync(known);
+        else Publish(FeedbackKind.Info, "没有可重新应用的预设", "请直接选择一个功耗预设。");
+    }
+    private async Task ApplyPresetAsync(PowerPreset preset)
+    {
+        if (_stopping) return;
         NotifyManualProfileChange();
         await RunOperationAsync(() =>
         {
-            bool ok = _power?.Apply(preset) == true; if (ok) _selectedPreset = preset;
+            bool ok = _power?.Apply(preset) == true; if (ok) { _selectedPreset = preset; _monitorPower = true; }
             _powerReadAt = _lastPowerRead = DateTimeOffset.Now;
-            return new(ok, PresetName(preset) + "已应用", "功耗预设未确认", ok ? _power!.Current!.ToString() : _power?.Message ?? "尚未初始化");
+            return new(ok, PresetName(preset) + "已应用", "功耗预设未确认", ok ? _power!.Current!.ToString() + (_power.BaselineNote.Length > 0 ? "\n" + _power.BaselineNote : "") : _power?.Message ?? "尚未初始化");
         }, "正在应用" + PresetName(preset) + "…");
     }
     private async void RestorePower_Click(object sender, RoutedEventArgs e)
     {
-        if (_busy || _stopping) return;
+        if (_stopping) return;
         NotifyManualProfileChange();
         await RunOperationAsync(() =>
         {

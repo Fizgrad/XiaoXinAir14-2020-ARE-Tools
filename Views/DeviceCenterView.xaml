@@ -182,7 +182,7 @@
                 <StackPanel Margin="10">
                     <Border Style="{StaticResource CardPanel}" Padding="20" Margin="0,4,0,10">
                         <StackPanel>
-                            <TextBlock Text="Ryzen 5 4600U 功耗与温度上限" FontSize="16" FontWeight="Bold"/>
+                            <TextBlock Text="Ryzen 5 4600U 功耗预设" FontSize="16" FontWeight="Bold"/>
                             <DockPanel x:Name="PowerPathControls" Margin="0,16,0,0">
                                 <Button DockPanel.Dock="Right" Content="选择 RyzenAdj" Click="ChooseRyzenAdj_Click" Margin="12,0,0,0"/>
                                 <TextBox x:Name="RyzenAdjPath" IsReadOnly="True" ToolTip="完整解压目录中的 ryzenadj.exe"/>
@@ -190,21 +190,24 @@
                             <Button x:Name="ReadPower" Content="读取当前参数" Click="ReadPower_Click" HorizontalAlignment="Left" Margin="0,14,0,0"/>
                             <Border x:Name="PowerCurrentCard" Background="#FF1B252C" CornerRadius="7" Padding="14,12" Margin="0,16,0,14">
                                 <StackPanel>
-                                    <UniformGrid Columns="3">
+                                    <UniformGrid Columns="2">
                                         <StackPanel><TextBlock Text="短时功耗上限" Style="{StaticResource CardTitle}"/><TextBlock x:Name="PowerFastValue" Text="-- W" FontSize="25" FontWeight="SemiBold" Margin="0,4,0,0"/></StackPanel>
                                         <StackPanel><TextBlock Text="持续功耗上限" Style="{StaticResource CardTitle}"/><TextBlock x:Name="PowerSlowValue" Text="-- W" FontSize="25" FontWeight="SemiBold" Margin="0,4,0,0"/></StackPanel>
-                                        <StackPanel><TextBlock Text="温度上限" Style="{StaticResource CardTitle}"/><TextBlock x:Name="PowerTemperatureValue" Text="-- °C" FontSize="25" FontWeight="SemiBold" Margin="0,4,0,0"/></StackPanel>
                                     </UniformGrid>
                                     <TextBlock x:Name="PowerCurrent" Text="当前限制：尚未读取" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
                             <UniformGrid Columns="3" x:Name="PresetControls" IsEnabled="False">
-                                <Button x:Name="PresetQuiet" Tag="Quiet" Click="PowerPreset_Click" Margin="0,0,10,0" Padding="10,14"><StackPanel><TextBlock x:Name="QuietTitle" Text="安静办公" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="QuietValues" Text="15 W / 12 W / 70°C" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
-                                <Button x:Name="PresetBalanced" Tag="Balanced" Click="PowerPreset_Click" Margin="0,0,10,0" Padding="10,14"><StackPanel><TextBlock x:Name="BalancedTitle" Text="均衡" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="BalancedValues" Text="25 W / 18 W / 80°C" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
-                                <Button x:Name="PresetSustained" Tag="Sustained" Click="PowerPreset_Click" Padding="10,14"><StackPanel><TextBlock x:Name="SustainedTitle" Text="持续负载" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="SustainedValues" Text="30 W / 25 W / 85°C" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
+                                <Button x:Name="PresetQuiet" Tag="Quiet" Click="PowerPreset_Click" Margin="0,0,10,0" Padding="10,14"><StackPanel><TextBlock x:Name="QuietTitle" Text="安静办公" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="QuietValues" Text="15 W / 12 W" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
+                                <Button x:Name="PresetBalanced" Tag="Balanced" Click="PowerPreset_Click" Margin="0,0,10,0" Padding="10,14"><StackPanel><TextBlock x:Name="BalancedTitle" Text="均衡" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="BalancedValues" Text="25 W / 18 W" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
+                                <Button x:Name="PresetSustained" Tag="Sustained" Click="PowerPreset_Click" Padding="10,14"><StackPanel><TextBlock x:Name="SustainedTitle" Text="持续负载" TextAlignment="Center" FontWeight="SemiBold"/><TextBlock x:Name="SustainedValues" Text="30 W / 25 W" TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel></Button>
                             </UniformGrid>
-                            <TextBlock Style="{StaticResource CardInfo}" Margin="0,10,0,0" Text="预设目标：短时功耗 / 持续功耗 / 温度上限"/>
-                            <Button x:Name="RestorePower" Content="恢复本次调整前参数" Click="RestorePower_Click" IsEnabled="False" HorizontalAlignment="Left" Margin="0,20,0,0"/>
+                            <TextBlock Style="{StaticResource CardInfo}" Margin="0,10,0,0" Text="预设目标：短时功耗 / 持续功耗；温度保护由固件负责，不写入温度墙"/>
+                            <WrapPanel Margin="0,20,0,0">
+                                <Button x:Name="RestorePower" Content="恢复本次调整前参数" Click="RestorePower_Click" IsEnabled="False"/>
+                                <Button x:Name="ReapplyPower" Content="重新应用上次预设" Click="ReapplyPower_Click" IsEnabled="False" Margin="10,0,0,0"
+                                        ToolTip="预设被 Fn+Q 等固件行为覆盖后，按上次选择的预设重新写入功耗限制"/>
+                            </WrapPanel>
                             <TextBlock x:Name="PowerOriginal" Text="恢复基准：首次应用预设时记录" Style="{StaticResource CardInfo}" Margin="0,8,0,0"/>
                             <TextBlock x:Name="PowerStatus" Text="点击读取参数后启用功耗预设" TextWrapping="Wrap" Margin="0,14,0,0"/>
                         </StackPanel>

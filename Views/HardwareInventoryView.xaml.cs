@@ -13,6 +13,8 @@ public partial class HardwareInventoryView : UserControl
     private readonly CancellationTokenSource _cancellation = new();
     private bool _scanning;
     public bool AutoScan { get; set; } = true;
+    /// <summary>由主窗口注入；用于只读读取 RyzenAdj 路径下的固件温度墙。</summary>
+    public AppSettings? Settings { get; set; }
     public HardwareInventoryReport? Report { get; private set; }
     public event Action<FeedbackMessage>? FeedbackPublished;
     public sealed record CategoryOption(string Name, string Label);
@@ -25,6 +27,18 @@ public partial class HardwareInventoryView : UserControl
         Loaded += async (_, _) => { if (AutoScan && Report == null && !_scanning) await ScanAsync(); };
     }
     private void Publish(FeedbackKind kind, string title, string detail) => FeedbackPublished?.Invoke(new(kind, title, detail, DateTimeOffset.Now));
+    /// <summary>只读探针：仅执行 RyzenAdj --info 读取固件温度墙，不发送任何设置项。</summary>
+    private Func<(float? LimitC, string Message)>? ThermalLimitProbe()
+    {
+        var settings = Settings;
+        if (settings == null) return null;
+        // 与“功耗预设”页同一路径规则：未单独选择时，回退到随程序分发的 tools\ryzenadj。
+        string path = string.IsNullOrWhiteSpace(settings.RyzenAdjPath)
+            ? Path.Combine(AppContext.BaseDirectory, "tools", "ryzenadj", "ryzenadj.exe") : settings.RyzenAdjPath;
+        return File.Exists(path)
+            ? () => PowerTuningService.ReadFirmwareThermalLimit(path)
+            : () => (null, "未找到 RyzenAdj；可在“功耗预设”页选择 ryzenadj.exe 后重新检测");
+    }
     private async void Scan_Click(object sender, RoutedEventArgs e) => await ScanAsync();
     public async Task ScanAsync()
     {
@@ -34,7 +48,8 @@ public partial class HardwareInventoryView : UserControl
         try
         {
             var progress = new Progress<string>(message => { if (!_cancellation.IsCancellationRequested) ScanStatus.Text = message; });
-            var report = await Task.Run(() => new HardwareInventoryReader().Scan(_cancellation.Token, progress));
+            var thermalLimit = ThermalLimitProbe();
+            var report = await Task.Run(() => new HardwareInventoryReader(thermalLimit).Scan(_cancellation.Token, progress));
             if (_cancellation.IsCancellationRequested) return;
             if (report.Devices.Count == 0 && report.Issues.Count > 0) throw new InvalidOperationException(report.Issues[0].Detail);
             ShowReport(report);

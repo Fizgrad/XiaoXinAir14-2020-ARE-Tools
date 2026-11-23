@@ -99,7 +99,7 @@ public class MonitorService : IDisposable
                 _cpu = hw;
                 CpuName = hw.Name;
             }
-            else if (hw.HardwareType.ToString().StartsWith("Gpu", StringComparison.Ordinal) && _gpu == null)
+            else if (IsGpu(hw.HardwareType) && (_gpu == null || IsIntegrated(hw.Name) && !IsIntegrated(_gpu.Name)))
             {
                 _gpu = hw;
                 GpuName = hw.Name;
@@ -111,6 +111,12 @@ public class MonitorService : IDisposable
         _gpu?.Update();
         ResolveSensors();
     }
+
+    private static bool IsGpu(HardwareType type) => type.ToString().StartsWith("Gpu", StringComparison.Ordinal);
+
+    /// <summary>双显卡机型（核显 + 独显）优先展示核显：它与 CPU 同芯，温度和功耗读数与 CPU 一致。</summary>
+    private static bool IsIntegrated(string name) => System.Text.RegularExpressions.Regex.IsMatch(name,
+        @"Radeon\(TM\) Graphics|Radeon Graphics|Vega \d|UHD|Iris|Apple", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private void ResolveSensors()
     {
@@ -153,16 +159,17 @@ public class MonitorService : IDisposable
         }
     }
 
+    /// <summary>按关键字顺序（越靠前越优先）判断候选温度传感器是否比当前更合适。
+    /// 不含任何关键字的名称排在最后；此前比较方向写反，实际偏好顺序与关键字顺序相反。</summary>
     private static bool BetterName(string candidate, string current, string[] keywords)
     {
         int Score(string n)
         {
-            int best = -1;
             for (int i = 0; i < keywords.Length; i++)
-                if (n.Contains(keywords[i], StringComparison.OrdinalIgnoreCase)) best = i;
-            return best;
+                if (n.Contains(keywords[i], StringComparison.OrdinalIgnoreCase)) return i;
+            return int.MaxValue;
         }
-        return Score(candidate) > Score(current);
+        return Score(candidate) < Score(current);
     }
 
     private void Loop()
@@ -209,7 +216,10 @@ public class MonitorService : IDisposable
         }
         catch { }
         // 个别 SMU 传感器出现较晚，缺失时再解析一次
-        if (_pkgPower == null || _socPower == null || _cpuTemp == null) ResolveSensors();
+        if (_pkgPower == null || _socPower == null || _cpuTemp == null || _coreClocks.Count == 0
+            || (_cpuLoad == null && _coreLoads.Count == 0) || _coreClocks.Count > _coreLoads.Count
+            || (_gpu != null && (_gpuTemp == null || _gpuLoad == null || _gpuClock == null || _gpuPower == null)))
+            ResolveSensors();
 
         float? maxClock = null;
         foreach (var s in _coreClocks)
@@ -250,5 +260,6 @@ public class MonitorService : IDisposable
         try { _loop?.Join(1500); } catch { }
         try { _computer?.Close(); } catch { }
         _computer = null;
+        EcIO.Reset(); // Ring0 随 LHM Computer 一起关闭，之后必须重新 Init 才能再访问 EC 端口
     }
 }

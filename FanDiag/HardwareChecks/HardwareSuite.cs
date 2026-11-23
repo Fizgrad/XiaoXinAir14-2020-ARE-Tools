@@ -300,8 +300,8 @@ internal sealed class HardwareSuite
         {
             await CenterReady(); button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); await CenterReady();
             Must(power.Target != null && power.Current != null, power.Message);
-            var requested = button.Tag!.ToString() switch { "Quiet" => new PowerLimits(15, 12, 70), "Balanced" => new PowerLimits(25, 18, 80), _ => new PowerLimits(30, 25, 85) };
-            var expected = new PowerLimits(Math.Min(requested.FastW, before!.FastW), Math.Min(requested.SlowW, before.SlowW), Math.Min(requested.TemperatureC, before.TemperatureC));
+            var requested = button.Tag!.ToString() switch { "Quiet" => new PowerLimits(15, 12), "Balanced" => new PowerLimits(25, 18), _ => new PowerLimits(30, 25) };
+            var expected = new PowerLimits(Math.Min(requested.FastW, before!.FastW), Math.Min(requested.SlowW, before.SlowW));
             Must(Matches(power.Target!, expected), "设置失败或回滚至其他参数：" + power.Message);
             Must(_center.LastFeedback?.Kind == FeedbackKind.Success, "功耗预设未显示成功反馈");
             await Task.Delay(500); Must(power.Refresh() && Matches(power.Current!, power.Target!), power.Message);
@@ -394,7 +394,12 @@ internal sealed class HardwareSuite
             if (_baselineProfile != ThermalProfile.Unknown) Must(_thermal.SetProfile(_baselineProfile), _thermal.LastMessage);
             if (_baselinePower != null)
             {
-                typeof(PowerTuningService).GetMethod("WriteAndVerify", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(_power, new object[] { _baselinePower });
+                // 反射不会自动补可选参数：按方法签名补 Type.Missing，避免签名带默认参数时出现“参数个数不匹配”
+                var write = typeof(PowerTuningService).GetMethod("WriteAndVerify", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var args = new object?[write.GetParameters().Length];
+                args[0] = _baselinePower;
+                for (int i = 1; i < args.Length; i++) args[i] = Type.Missing;
+                write.Invoke(_power, args);
                 Must(_power.Refresh() && Matches(_power.Current!, _baselinePower), _power.Message);
             }
             var actual = _device.Refresh();
@@ -434,7 +439,7 @@ internal sealed class HardwareSuite
         var watch = Stopwatch.StartNew();
         while (!condition()) { if (watch.Elapsed.TotalSeconds > seconds) throw new InvalidOperationException(error); await Task.Delay(100); }
     }
-    private static bool Matches(PowerLimits a, PowerLimits b) => Math.Abs(a.FastW - b.FastW) < .2 && Math.Abs(a.SlowW - b.SlowW) < .2 && Math.Abs(a.TemperatureC - b.TemperatureC) < 1;
+    private static bool Matches(PowerLimits a, PowerLimits b) => Math.Abs(a.FastW - b.FastW) < .2 && Math.Abs(a.SlowW - b.SlowW) < .2;
     private static void Must(bool yes, string error) { if (!yes) throw new InvalidOperationException(error); }
     private static string Error(Exception ex) => ex is TargetInvocationException { InnerException: { } inner } ? inner.ToString() : ex.ToString();
     private static string? Hash(string path) => File.Exists(path) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) : null;
