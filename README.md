@@ -3,7 +3,7 @@
 联想小新 Air 14 2020 锐龙版（81YN）的硬件管理工具。
 
 - **Debian / Linux：1.4.0**，原生 Python 3 + GTK 3，支持 **Wayland 和 X11**。
-- **Windows：1.3.2**，原有 WPF 版本保留。
+- **Windows：1.3.3**，原有 WPF 版本保留。
 
 ## Debian 13 安装
 
@@ -72,7 +72,7 @@ sh tools/build-deb.sh
 
 Linux 接口依据：[ideapad-laptop ABI](https://github.com/torvalds/linux/blob/v6.12/Documentation/ABI/testing/sysfs-platform-ideapad-laptop)、[platform_profile ABI](https://github.com/torvalds/linux/blob/v6.12/Documentation/ABI/testing/sysfs-platform_profile)、[GTK Wayland 支持](https://docs.gtk.org/gtk3/wayland.html)。
 
-## Windows 1.3.2 功能
+## Windows 1.3.3 功能
 
 | 功能 | 内容 |
 |---|---|
@@ -90,7 +90,7 @@ Linux 接口依据：[ideapad-laptop ABI](https://github.com/torvalds/linux/blob
 
 ## Windows 安装与使用
 
-从 [Windows Release](https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools/releases/tag/v1.3.2) 下载 `FanController-v1.3.2-win-x64-Setup.exe`，按向导安装。安装版包含 .NET 运行时、RyzenAdj 和配套组件，支持开始菜单、可选桌面快捷方式及 Windows 卸载。
+从 [Windows Release](https://github.com/Fizgrad/XiaoXinAir14-2020-ARE-Tools/releases/tag/v1.3.3) 下载 `FanController-v1.3.3-win-x64-Setup.exe`，按向导安装。安装版包含 .NET 运行时、RyzenAdj 和配套组件，支持开始菜单、可选桌面快捷方式及 Windows 卸载。
 
 也可下载便携压缩包，完整解压后运行 `FanController.exe`；便携版需要 [.NET 8 Desktop Runtime（x64）](https://dotnet.microsoft.com/zh-cn/download/dotnet/8.0)。
 
